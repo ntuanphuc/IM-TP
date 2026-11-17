@@ -32,10 +32,10 @@ export function ImagePreview({id, name, onDownload}: {id:string; name:string; on
 
   return <div className="image-attachment" ref={container}>
     {preview
-      ? <button type="button" className="image-thumb" onClick={onDownload} title="Tải ảnh gốc">
+      ? <button type="button" className="image-thumb" onClick={onDownload} title="Download original image">
           <img src={preview} alt={name} />
         </button>
-      : <div className="image-placeholder">{failed ? "Không có ảnh xem trước" : "Đang tải ảnh…"}</div>}
-    <div className="image-caption"><span title={name}>{name}</span><button onClick={onDownload}>Tải ảnh</button></div>
+      : <div className="image-placeholder">{failed ? "Image preview unavailable" : "Loading image…"}</div>}
+    <div className="image-caption"><span title={name}>{name}</span><button onClick={onDownload}>Download image</button></div>
   </div>;
 }

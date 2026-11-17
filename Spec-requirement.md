@@ -1,386 +1,386 @@
-# Đặc tả yêu cầu: Ứng dụng chat nội bộ trường học (Backend Go)
+# Requirements Specification for the School Messaging App (Go Backend)
 
-Phiên bản 1.2 · 15/11/2026 · Dùng làm đầu vào cho AI coding
+Version 1.2 · November 15, 2026 · For AI-assisted development
 
-## 1. Bối cảnh và mục tiêu
+## 1. Background and objectives
 
-Trường học cần một ứng dụng chat nội bộ **thay thế Microsoft Teams** cho phần nhắn tin. Hệ thống **self-host hoàn toàn**, xác thực **trực tiếp qua Active Directory (LDAPS)**, không phụ thuộc SSO/IdP bên ngoài.
+The school needs an internal messaging app to **replace Microsoft Teams for messaging**. The entire system is **self-hosted** and authenticates **directly against Active Directory over LDAPS**, with no dependency on an external SSO provider or identity provider.
 
-**Quy mô:** \~11.000 tài khoản (khoảng 1.000 giáo viên/nhân viên và 10.000 học sinh), 2.000-3.000 kết nối đồng thời giờ cao điểm. Thiết kế chịu được gấp 3 lần.
+**Scale** — About 11,000 accounts, including around 1,000 teachers and staff and 10,000 students. Expect 2,000–3,000 concurrent connections at peak and design for three times that load.
 
-**Đối tượng sử dụng:** không chỉ học sinh và giáo viên mà cả các phòng ban hành chính, vận hành (HR, tài chính, ban giám hiệu, IT...). Tất cả dùng chung một mô hình **segment + rule** (mục 7). Thành viên và manager của các phòng ban **không tự đồng bộ từ AD** nên được quản lý thủ công trong ứng dụng.
+**Users** include students, teachers, and administrative and operational departments such as HR, finance, school leadership, and IT. All use the same **segment and rule** model (section 7). Manage department members and managers manually in the app because AD does not synchronize them automatically.
 
-**Mục tiêu chính:**
+**Primary objectives**
 
-- Chat 1-1, nhóm, channel theo lớp/môn/phòng ban
-- Đăng nhập bằng tài khoản AD hiện có, tự đồng bộ user, group và channel membership
-- Broadcast thỉnh thoảng tới toàn bộ \~10.000 học sinh, hoặc theo khối/lớp
-- Bảo vệ học sinh (trẻ vị thành niên) bằng policy kiểm soát ai được nhắn tin cho ai
-- Vận hành được bởi đội IT nhỏ: ít thành phần, dễ backup, dễ giám sát
+- Support direct messages, group chats, and channels for classes, subjects, and departments
+- Sign in with existing AD accounts and automatically synchronize users, groups, and channel membership
+- Occasionally broadcast to all 10,000 students or to specific grades or classes
+- Protect students who are minors with policies that control who can message whom
+- Keep the system manageable for a small IT team with few components and straightforward backup and monitoring
 
-## 2. Phạm vi
+## 2. Scope
 
-**Trong phạm vi (MVP):** chat, channel, thread, reaction, mention, file, search, AD auth, segment/policy (học sinh và các phòng ban), quản lý thành viên thủ công, broadcast, push notification, audit log, retention, admin API.
+The **MVP** includes chat, channels, threads, reactions, mentions, files, search, AD authentication, segments and policies for students and departments, manual membership management, broadcasts, push notifications, audit logs, retention, and an admin API.
 
-Chat dành cho iOS, Android và trình duyệt. Quản trị thực hiện trên ứng dụng web riêng.
+Chat is available on iOS, Android, and browsers. Administrators use a separate web app.
 
-**Ngoài phạm vi (giai đoạn sau):** gọi thoại/video, chia sẻ màn hình, bot/webhook/slash command, E2EE, workflow builder, tích hợp bên thứ ba.
+Later phases cover voice and video calls, screen sharing, bots, webhooks, slash commands, end-to-end encryption, a workflow builder, and third-party integrations.
 
-**Giả định:** có ít nhất 2 domain controller hỗ trợ LDAPS; trường có tài khoản Apple Developer và Firebase project riêng; hạ tầng chạy on-premise bằng Docker.
+The school has at least two domain controllers that support LDAPS, an Apple Developer account, and its own Firebase project. Infrastructure runs on-premises with Docker.
 
-## 3. Tech stack cố định
+## 3. Required technology stack
 
-AI coding phải dùng đúng các lựa chọn dưới đây, không tự thay thế.
+Use the technologies listed below for AI-assisted development.
 
-| Hạng mục | Lựa chọn |
+| Category | Technology |
 | --- | --- |
-| Ngôn ngữ | Go (phiên bản ổn định mới nhất) |
+| Language | Go (latest stable version) |
 | HTTP router | `chi` |
 | WebSocket | `github.com/coder/websocket` |
-| DB access | `pgx` + `sqlc` (sinh code từ SQL) |
+| Database access | `pgx` + `sqlc` (generate code from SQL) |
 | Migration | `goose` |
 | Database | PostgreSQL |
 | Cache, presence, pub/sub | Redis (`go-redis`) |
 | Queue | NATS JetStream (`nats.go`) |
-| Search | OpenSearch (analyzer ICU/folding cho tiếng Việt có dấu) |
-| Object storage | MinIO (`minio-go`), quét virus bằng ClamAV |
+| Search | OpenSearch with ICU analysis and folding for Vietnamese diacritics |
+| Object storage | MinIO (`minio-go`) with ClamAV virus scanning |
 | LDAP | `github.com/go-ldap/ldap/v3` |
 | JWT | `github.com/golang-jwt/jwt/v5` |
 | Push | FCM (Firebase Admin SDK cho Go), APNs (`sideshow/apns2`) |
 | Logging | `log/slog` (JSON) |
 | Metrics/tracing | Prometheus + OpenTelemetry |
-| Config | biến môi trường + file YAML, validate khi khởi động |
+| Configuration | Environment variables and YAML files, validated at startup |
 | Test | `testing`, `testify`, `testcontainers-go` |
-| Đóng gói | Docker, docker-compose cho dev, k3s hoặc Compose/Swarm cho production |
+| Packaging | Docker, Docker Compose for development, and k3s or Compose/Swarm for production |
 
-## 4. Kiến trúc và cấu trúc repo
+## 4. Architecture and repository layout
 
-**Modular monolith**: một binary `server` (API + WebSocket) và một binary `worker` (push, broadcast, quét file, sync AD, indexing). Dùng chung codebase, tách bằng package. Không dùng microservices.
+Use a **modular monolith** with a `server` binary for the API and WebSocket and a `worker` binary for push notifications, broadcasts, file scanning, AD synchronization, and indexing. Both share one codebase organized by package.
 
 ```
 /cmd/server        # HTTP + WebSocket entrypoint
 /cmd/worker        # queue consumers, scheduled jobs
 /internal/auth     # LDAP, JWT, refresh token, break-glass admin
-/internal/directory# đồng bộ AD (user, group, role mapping)
+/internal/directory# AD synchronization (users, groups, role mapping)
 /internal/chat     # channel, message, thread, reaction, read state
 /internal/realtime # WebSocket hub, presence, typing, resume
-/internal/policy   # luật ai được nhắn ai, quyền theo role
+/internal/policy   # messaging rules and role-based permissions
 /internal/broadcast# audience resolution, scheduling, stats
 /internal/push     # device registry, FCM/APNs senders
 /internal/files    # upload, MinIO, scan status
 /internal/search   # indexer, query
 /internal/audit    # append-only audit log
-/internal/retention# job xóa/lưu trữ theo policy
+/internal/retention# policy-driven deletion and archiving jobs
 /internal/platform # config, db, redis, nats, logger, metrics
 /migrations        # goose SQL
-/api               # openapi.yaml (nguồn chân lý của REST API)
+/api               # openapi.yaml (REST API source of truth)
 /deploy            # docker-compose, k8s manifests
 ```
 
-**Quy tắc kiến trúc:**
+**Architecture rules**
 
-- Mỗi package `internal/*` chỉ lộ interface cần thiết; không import chéo vòng
-- Mọi truy vấn SQL viết trong file `.sql` và sinh bằng `sqlc`
-- Server **stateless**: trạng thái nằm ở Postgres/Redis, nên chạy được nhiều instance sau load balancer
-- WebSocket giữa các instance đồng bộ qua Redis pub/sub
-- `context.Context` truyền xuyên suốt, có timeout cho mọi lời gọi ra ngoài
+- Each `internal/*` package exposes only the necessary interfaces and avoids circular imports
+- Write all SQL queries in `.sql` files and generate code with `sqlc`
+- Keep the server **stateless** by storing state in PostgreSQL or Redis so multiple instances can run behind a load balancer
+- Synchronize WebSocket traffic across instances with Redis pub/sub
+- Propagate `context.Context` throughout and set timeouts on all external calls
 
-### Monorepo và ranh giới triển khai
+### Monorepo and deployment boundaries
 
 ```text
 backend/                     # Go module
-  cmd/server/                # REST, xác thực, WebSocket
+  cmd/server/                # REST, authentication, WebSocket
   cmd/worker/                # AD sync, outbox, search, file, push, retention
-  internal/                  # các module nghiệp vụ ở trên
+  internal/                  # business modules listed above
   migrations/
 apps/
-  mobile/                    # React Native + TypeScript, iOS và Android
-  web-chat/                  # React + TypeScript, chat cho người dùng
-  admin-web/                 # React + TypeScript, build tĩnh
+  mobile/                    # React Native + TypeScript for iOS and Android
+  web-chat/                  # React + TypeScript chat app
+  admin-web/                 # React + TypeScript static build
 packages/
-  api-client/                # client và kiểu REST sinh từ OpenAPI
-  realtime-contract/         # kiểu và kiểm tra payload WebSocket
+  api-client/                # REST client and types generated from OpenAPI
+  realtime-contract/         # WebSocket payload types and validation
 api/
   openapi.yaml
-  realtime/                  # JSON Schema và ví dụ WebSocket
+  realtime/                  # JSON Schema and WebSocket examples
 deploy/
 docs/
 ```
 
-- Các đường dẫn `cmd`, `internal` và `migrations` trong sơ đồ backend thuộc `backend/`. Ba ứng dụng TypeScript dùng chung workspace và lockfile.
-- **Mobile** chia theo auth, chat, files, search và notifications. Tầng dữ liệu quản lý REST, WebSocket, resume và hàng đợi gửi lại với `client_msg_id`. Refresh token lưu trong kho bảo mật hệ điều hành. Xóa dữ liệu chat cục bộ khi đăng xuất hoặc xác nhận phiên đã bị thu hồi.
-- **Web quản trị** chia theo directory, segments, approvals, broadcasts, audit và retention. Reverse proxy phục vụ web tĩnh và chuyển tiếp `/v1` cùng origin. Access token giữ trong bộ nhớ. Refresh dùng cookie `HttpOnly`, `Secure`, `SameSite` và bảo vệ CSRF.
-- **Web chat** chia theo auth, channels, messages, threads, files, search và announcements. Build tĩnh trên origin riêng với web quản trị. Reverse proxy origin web chat phục vụ frontend và chuyển tiếp REST/WebSocket `/v1` tới cùng backend.
-- Client dùng chung hợp đồng, kiểu dữ liệu và client API. Backend thực thi policy và audit. Mỗi app sở hữu UI và trạng thái riêng. CI kiểm tra mã sinh khớp hợp đồng và build/test từng app. Server, worker, web và mobile có quy trình phát hành riêng. Duy trì tương thích `/v1` với các bản mobile còn hỗ trợ.
+- The `cmd`, `internal`, and `migrations` directories in the backend layout are under `backend/`. The three TypeScript apps share a workspace and lockfile.
+- **Mobile** is organized into authentication, chat, files, search, and notifications. The data layer manages REST, WebSocket, resumption, and the retry queue keyed by `client_msg_id`. Store refresh tokens in the operating system's secure storage. Clear local chat data on sign-out or confirmed session revocation.
+- **Admin web** is organized into directory, segments, approvals, broadcasts, audit, and retention. The reverse proxy serves static assets and forwards `/v1` on the same origin. Keep access tokens in memory. Use an `HttpOnly`, `Secure`, `SameSite` cookie and CSRF protection for refreshes.
+- **Web chat** is organized into authentication, channels, messages, threads, files, search, and announcements. Serve the static build on a separate origin from the admin app. Its reverse proxy serves the frontend and forwards `/v1` REST and WebSocket traffic to the same backend.
+- Clients share contracts, types, and the API client. The backend enforces policies and records audit events. Each app owns its UI and state. CI checks that generated code matches the contracts and builds and tests each app. The server, worker, web apps, and mobile app have separate release processes. Maintain `/v1` compatibility with supported mobile versions.
 
-## 5. Mô hình dữ liệu
+## 5. Data model
 
-ID dùng **ULID** (text 26 ký tự) cho `channels`, `messages`, `files`; UUID cho các bảng còn lại. Mọi bảng có `created_at`; bảng có thể sửa có `updated_at`.
+Use **ULIDs** (26-character text) for `channels`, `messages`, and `files`. Use UUIDs for the other tables. Every table has `created_at`. Mutable tables also have `updated_at`.
 
-- **users**: id, ad\_guid (unique), username, display\_name, email, status (`active|disabled`), org\_unit, grade (smallint, null), class\_code (null), manager\_id (null, nhập thủ công, tùy chọn), is\_system\_admin (bool), avatar\_key, last\_synced\_at. Quyền **không** lưu bằng cột role cố định mà tính từ segment (mục 7)
-- **ad\_groups** / **user\_ad\_groups**: dn, name; quan hệ nhiều-nhiều với users
-- **segments**: id, key (unique, ví dụ `student:grade10`, `dept:hr`), name, mode (`ad|manual|hybrid`), ad\_group\_dn (null, dùng cho `ad` và `hybrid`), is\_minor (bool), sensitive (bool), review\_interval\_days (null)
+- **users**: id, ad\_guid (unique), username, display\_name, email, status (`active|disabled`), org\_unit, grade (smallint, nullable), class\_code (nullable), manager\_id (nullable, entered manually and optional), is\_system\_admin (bool), avatar\_key, last\_synced\_at. Derive permissions from segments (section 7) and omit a fixed role column.
+- **ad\_groups** / **user\_ad\_groups**: dn, name, with a many-to-many relationship to users
+- **segments**: id, key (unique, for example `student:grade10` or `dept:hr`), name, mode (`ad|manual|hybrid`), ad\_group\_dn (nullable, used for `ad` and `hybrid`), is\_minor (bool), sensitive (bool), review\_interval\_days (nullable)
 - **segment\_members**: segment\_id, user\_id, role (`member|manager|owner`), source (`ad_sync|manual`), suppressed (bool), added\_by, added\_at, expires\_at (null), last\_reviewed\_at
-- **segment\_change\_requests**: id, segment\_id, action (`add|remove|set_role`), target\_user\_id, requested\_by, approved\_by (null), status (`pending|approved|rejected`); dùng cho segment `sensitive`
+- **segment\_change\_requests**: id, segment\_id, action (`add|remove|set_role`), target\_user\_id, requested\_by, approved\_by (nullable), status (`pending|approved|rejected`). Used for `sensitive` segments.
 - **segment\_reviews**: id, segment\_id, due\_at, completed\_by (null), completed\_at (null), removed\_count
 - **policy\_rules**: id, subject\_segment, action, object\_segment (null), scope (jsonb), effect (`allow|deny`), conditions (jsonb), priority (int), enabled
-- **channels**: id, type (`public|private|dm|group_dm|announcement`), name, topic, class\_code (null), segment\_id (null, channel gắn segment), created\_by, archived\_at, **last\_seq bigint**
+- **channels**: id, type (`public|private|dm|group_dm|announcement`), name, topic, class\_code (nullable), segment\_id (nullable, links a channel to a segment), created\_by, archived\_at, **last\_seq bigint**
 - **channel\_members**: channel\_id, user\_id, role (`owner|member`), **last\_read\_seq**, muted\_until, notif\_pref (`all|mentions|none`), source (`manual|segment`), joined\_at
-- **messages**: id, channel\_id, **seq bigint**, sender\_id, parent\_id (null, dùng cho thread), body, attachments (jsonb), edited\_at, deleted\_at. Bảng thường trong MVP, PRIMARY KEY (id), UNIQUE (channel\_id, seq). Đánh giá partition khi có số liệu vận hành.
+- **messages**: id, channel\_id, **seq bigint**, sender\_id, parent\_id (nullable, used for threads), body, attachments (jsonb), edited\_at, deleted\_at. Use a regular table in the MVP with `PRIMARY KEY (id)` and `UNIQUE (channel_id, seq)`. Evaluate partitioning once operational data is available.
 - **reactions**: message\_id, user\_id, emoji
 - **files**: id, uploader\_id, channel\_id, object\_key, name, mime, size, sha256, scan\_status (`pending|clean|infected`)
 - **devices**: id, user\_id, platform (`ios|android|web`), push\_token, app\_version, last\_seen\_at
 - **refresh\_tokens**: id, user\_id, device\_id, token\_hash, expires\_at, revoked\_at, replaced\_by
-- **broadcasts**: id, created\_by, audience (jsonb, biểu thức segment), message\_id, scheduled\_at, status (`draft|scheduled|sending|done|failed|cancelled`), stats (jsonb)
+- **broadcasts**: id, created\_by, audience (jsonb, segment expression), message\_id, scheduled\_at, status (`draft|scheduled|sending|done|failed|cancelled`), stats (jsonb)
 - **push\_jobs**: id, broadcast\_id (null), device\_id, status, attempts, last\_error
-- **policies**: key, value (jsonb), updated\_by (cấu hình chung như giờ yên lặng, danh sách từ khóa cấm)
+- **policies**: key, value (jsonb), updated\_by (general settings such as quiet hours and blocked keywords)
 - **retention\_rules**: scope (`global|channel_type|channel`), scope\_ref, keep\_days
-- **audit\_logs**: id, actor\_id, action, target\_type, target\_id, metadata (jsonb), ip, created\_at. Chỉ INSERT (revoke UPDATE/DELETE ở mức DB role)
+- **audit\_logs**: id, actor\_id, action, target\_type, target\_id, metadata (jsonb), ip, created\_at. Allow `INSERT` only by revoking `UPDATE` and `DELETE` at the database role level.
 
-**Cấp seq (bắt buộc đúng):** khi gửi tin, trong **một transaction** thực hiện `UPDATE channels SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq`, rồi INSERT message với seq đó. Seq liên tục, không trùng, không nhảy cóc trong một channel.
+**Sequence allocation.** When sending a message, execute `UPDATE channels SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq` and insert the message with the returned sequence number in **one transaction**. Sequence numbers are consecutive and unique within each channel.
 
-**Đã đọc:** cập nhật `last_read_seq` theo mốc lớn nhất đã xác nhận, giới hạn bởi `last_seq`. Unread đếm tin còn hiển thị, có quyền đọc, với `seq > last_read_seq`. Mốc đọc ban đầu phụ thuộc quyền xem lịch sử khi vào channel.
+**Read state.** Advance `last_read_seq` to the highest acknowledged sequence, capped by `last_seq`. Count only visible messages the user may read whose `seq > last_read_seq`. The initial read position depends on whether the user can see prior history when joining.
 
-## 6. Xác thực AD và phiên đăng nhập
+## 6. AD authentication and sessions
 
-**Đăng nhập** `POST /v1/auth/login` với `username`, `password`, `device` (platform, push\_token tùy chọn):
+**Sign-in** uses `POST /v1/auth/login` with `username`, `password`, and `device` (platform and optional push token).
 
-1. Kết nối LDAPS tới danh sách DC (thử lần lượt, timeout ngắn, có circuit breaker)
-2. Bind bằng service account read-only, tìm user theo `sAMAccountName` hoặc `userPrincipalName`
-3. Bind lại bằng DN của user với mật khẩu cung cấp để xác thực
-4. Đọc `memberOf`, `userAccountControl`, `objectGUID`; map group AD → **segment** (chỉ các segment `mode=ad` hoặc `hybrid`) theo cấu hình YAML (ví dụ group `CN=HocSinh` → segment `student`). Segment `manual` không phụ thuộc AD
-5. Upsert user vào DB, đồng bộ membership `source=ad_sync`, cấp **access JWT (15 phút)** và **refresh token (30 ngày, xoay vòng, lưu hash)**
+1. Try the domain controllers in order over LDAPS with short timeouts and a circuit breaker.
+2. Bind with a read-only service account and look up the user by `sAMAccountName` or `userPrincipalName`.
+3. Bind again with the user's DN and supplied password to authenticate.
+4. Read `memberOf`, `userAccountControl`, and `objectGUID`. Map AD groups to **segments** in YAML, for example `CN=HocSinh` to `student`. Apply this mapping only to `ad` and `hybrid` segments. Manual segments are independent of AD.
+5. Upsert the user, synchronize `source=ad_sync` membership, and issue a **15-minute access JWT** and a **30-day refresh token**. Rotate the refresh token and store its hash.
 
-**Yêu cầu:**
+**Requirements**
 
-- Mật khẩu không bao giờ được log hay lưu
-- Refresh **không** gọi AD, nên phiên đang đăng nhập không chết khi AD gián đoạn
-- Job sync mỗi 15 phút: user bị disable/xóa trong AD → `status=disabled`, thu hồi toàn bộ refresh token, ngắt WebSocket
-- Rate limit đăng nhập theo IP và theo username (Redis)
-- **Break-glass admin:** 1-2 tài khoản local (mật khẩu hash bằng argon2id) để vào được hệ thống khi AD sập. Mọi lần dùng đều ghi audit
-- Phát hiện reuse refresh token cũ → thu hồi cả chuỗi token của thiết bị đó
+- Never log or store passwords
+- Refresh tokens without calling AD so active sessions survive an AD outage
+- Synchronize every 15 minutes. Set users disabled or deleted in AD to `status=disabled`, revoke all their refresh tokens, and disconnect their WebSockets
+- Enforce sign-in rate limits by IP address and username using Redis
+- Provide one or two local **break-glass admin** accounts with Argon2id password hashes for AD outages. Audit every use
+- Revoke the device's entire token chain when an old refresh token is reused
 
-**Thu hồi phiên:** REST kiểm tra trạng thái user và phiên qua store dùng chung. WebSocket kiểm tra khi mở, refresh và trước khi xử lý hoặc phát dữ liệu được bảo vệ. Khóa tài khoản vô hiệu phiên sau commit, đóng socket trong tối đa 60 giây. Lưu khóa thủ công riêng với trạng thái AD. Chỉ suy ra user bị xóa sau một vòng đối soát hoàn tất thành công. MVP ánh xạ group trực tiếp. Dùng OpenLDAP trong CI và kiểm thử LDAPS, objectGUID, disable và failover trên AD staging.
+**Session revocation.** REST checks user and session state through a shared store. WebSocket checks at connection, at refresh, and before processing or emitting protected data. Disabling an account invalidates sessions after commit and closes sockets within 60 seconds. Track manual locks separately from AD state. Infer deletion only after successful reconciliation. The MVP maps direct group memberships. Use OpenLDAP in CI and test LDAPS, `objectGUID`, account disabling, and failover against staging AD.
 
-## 7. Phân quyền, segment và policy
+## 7. Authorization, segments, and policies
 
-Quyền tính từ **segment** và **rule**. Mặc định từ chối. Mọi deny khớp thắng mọi allow khớp. `priority` chỉ sắp xếp rule cùng hiệu lực để giải thích quyết định. Ngoại lệ DM theo khối cần điều kiện loại trừ trong rule deny và rule allow tường minh. Kiểm tra lại quyền khi đọc, gửi, đổi thành viên hoặc phát realtime. Group DM mất giáo viên cuối cùng bị khóa gửi tới khi đủ điều kiện.
+Compute permissions from **segments** and **rules**. Deny by default. Any matching deny overrides all matching allows. `priority` orders rules of the same effect for decision explanations. Grade-level DM exceptions require an exclusion in the deny rule and an explicit allow rule. Recheck permissions on reads, sends, membership changes, and realtime delivery. Suspend sends in a group DM that loses its last teacher until it meets the requirement again.
 
-**Segment.** Mỗi segment có `key` (ví dụ `student`, `student:grade10`, `teacher`, `staff`, `dept:hr`, `dept:finance`, `management`), `mode` (`ad`: chỉ sync từ group AD; `manual`: chỉ quản lý trong app; `hybrid`: cả hai), cờ `is_minor` (segment học sinh, tự áp policy bảo vệ mặc định) và cờ `sensitive` (HR, tài chính, ban giám hiệu: bật duyệt hai người và rà soát chặt hơn). Một người thuộc nhiều segment (giáo viên vừa là `teacher` vừa là `dept:math`); quyền hiệu lực là hợp của mọi segment, tính khi đăng nhập, cache trong Redis và xóa cache khi membership đổi.
+**Segments.** Each segment has a `key`, such as `student`, `student:grade10`, `teacher`, `staff`, `dept:hr`, `dept:finance`, or `management`. The `mode` is `ad` for AD group sync, `manual` for in-app management, or `hybrid` for both. The `is_minor` flag applies default safeguards to student segments. The `sensitive` flag enables two-person approval and stricter review for groups such as HR, finance, and school leadership. A user may belong to several segments, such as `teacher` and `dept:math`. Combine permissions across all segments, calculate them at sign-in, cache them in Redis, and invalidate the cache on membership changes.
 
-**Rule mẫu mặc định** (cấu hình được trong `policy_rules`):
+**Default rule examples** configurable in `policy_rules`
 
 | Subject | Action | Object | Effect |
 | --- | --- | --- | --- |
-| `student` | `dm.create` | `student` | deny (mặc định, bật được theo khối) |
+| `student` | `dm.create` | `student` | deny (default, configurable by grade) |
 | `student` | `dm.create` | `teacher` | allow |
-| `student` | `channel.create` | mọi loại | deny |
-| mọi segment | `group_dm.create` | nhóm có thành viên `student` | allow khi có ít nhất 1 thành viên `teacher` |
-| `teacher` | `channel.create` | mọi loại | allow |
-| `teacher` | `broadcast.send` | lớp phụ trách | allow |
+| `student` | `channel.create` | Any type | deny |
+| Any segment | `group_dm.create` | Group with a `student` member | allow when at least one member is a `teacher` |
+| `teacher` | `channel.create` | Any type | allow |
+| `teacher` | `broadcast.send` | Assigned class | allow |
 | `staff` | `dm.create` | `staff` | allow |
 | `dept:hr` | `channel.create` | private | allow |
-| `management` | `broadcast.send` | mọi audience | allow |
-| manager của `dept:X` | `broadcast.send` | `dept:X` | allow |
-| manager của `dept:X` | `segment.member.manage` | `dept:X` | allow |
-| mọi segment | `message.delete_others` | channel mình sở hữu | allow |
-| `student`, `guest` | `broadcast.send`, `audit.read` | mọi audience | deny |
+| `management` | `broadcast.send` | Any audience | allow |
+| `dept:X` manager | `broadcast.send` | `dept:X` | allow |
+| `dept:X` manager | `segment.member.manage` | `dept:X` | allow |
+| Any segment | `message.delete_others` | Channel the user owns | allow |
+| `student`, `guest` | `broadcast.send`, `audit.read` | Any audience | deny |
 
-**Quản lý thành viên thủ công và yêu cầu chung:** danh tính luôn lấy từ AD, nhưng thành viên và manager của phòng ban không tự đồng bộ nên được quản lý trong ứng dụng.
+**Manual membership and general requirements.** AD supplies identities. Manage department members and managers directly in the app.
 
-- Segment `manual` hoặc `hybrid`: membership `source=manual` do owner/manager (được ủy quyền) hoặc admin hệ thống thêm/xóa. Job sync AD **chỉ thao tác trên dòng `source=ad_sync`**, không bao giờ xóa hay ghi đè dòng `manual`
-- Muốn loại một người dù AD vẫn cho vào group thì đặt `suppressed=true` thay vì xóa dòng, để lần sync sau không thêm lại
-- Vai trò: `member`; `manager` (thêm/xóa member, duyệt yêu cầu tham gia trong segment của mình); `owner` (thêm được cả manager khác). Chỉ admin hệ thống được tạo segment mới và gán owner đầu tiên
-- Thành viên tạm thời bằng `expires_at`; job hằng ngày gỡ thành viên hết hạn
-- **Rà soát định kỳ** (mặc định 6 tháng, theo `review_interval_days`): hệ thống nhắc manager xác nhận danh sách; thành viên không được xác nhận sau hạn bị gỡ hoặc báo cho admin (cấu hình được)
-- Segment `sensitive`: mọi thay đổi membership đi qua `segment_change_requests` và cần người thứ hai duyệt
-- Offboarding: user bị disable hoặc xóa trong AD tự bị gỡ khỏi mọi segment (kể cả membership thủ công) và bị thu hồi phiên
-- Channel gắn segment (`channels.segment_id`): khi membership đổi, `channel_members` tự cập nhật với `source=segment`; thành viên thêm tay vào channel giữ `source=manual` và không bị sync xóa
-- Segment `is_minor` tự áp bộ rule bảo vệ mặc định: cấm DM giữa học sinh, group DM có học sinh bắt buộc có giáo viên, giờ yên lặng (không push ngoài khung giờ, tin vẫn được lưu), lọc từ khóa cấu hình được, báo cáo tin nhắn cho giáo viên/admin
-- Cô lập dữ liệu là **tùy chọn theo segment, mặc định tắt**: khi bật cho segment `sensitive`, chỉ thành viên mới thấy channel và tin (kể cả trong search); admin hệ thống chỉ đọc nội dung khi được cấp quyền riêng và mọi lần đọc ghi audit
-- Mọi kiểm tra quyền nằm ở `internal/policy` (hàm thuần, dễ test), được gọi từ cả REST lẫn WebSocket; mọi thay đổi membership và rule đều ghi audit
+- In `manual` or `hybrid` segments, authorized owners, managers, or system administrators add and remove `source=manual` memberships. AD sync writes only `source=ad_sync` rows and preserves manual rows.
+- Set `suppressed=true` to exclude a user who still belongs to the AD group so the next sync does not re-add them.
+- A `manager` can add or remove members and approve join requests for their segment. An `owner` can also add managers. Only system administrators can create segments and assign the first owner. Other participants have the `member` role.
+- Use `expires_at` for temporary membership. A daily job removes expired memberships.
+- **Periodic review** uses `review_interval_days` and defaults to six months. Remind managers to confirm the roster. After the deadline, remove unconfirmed members or notify an administrator according to configuration.
+- All membership changes in `sensitive` segments go through `segment_change_requests` and require a second approver.
+- Offboarding removes users disabled or deleted in AD from all segments, including manual memberships, and revokes their sessions.
+- For a segment-linked channel (`channels.segment_id`), membership changes automatically update `channel_members` with `source=segment`. Synchronization preserves entries added manually with `source=manual`.
+- Segments marked `is_minor` automatically apply default safeguards. Block student-to-student DMs, require a teacher in group DMs with students, suppress push notifications during quiet hours while preserving messages, support configurable keyword filtering, and allow message reports to teachers or administrators.
+- Data isolation is **optional per segment and off by default**. When enabled for a `sensitive` segment, only members can see channels and messages, including in search. System administrators need a separate grant to read content, and every read is audited.
+- Keep all authorization checks in `internal/policy` as pure, testable functions called by REST and WebSocket. Audit every membership and rule change.
 
-**Duyệt hai người:** segment nhạy cảm dùng mode `manual` trong MVP. Thay đổi thủ công, kể cả CSV và đổi vai trò, cần người có quyền duyệt khác người yêu cầu. Hết hạn và offboarding chặn quyền ngay. Ghi audit trong cùng transaction khi thay đổi membership, duyệt hoặc từ chối.
+**Two-person approval.** Sensitive segments use `manual` mode in the MVP. Manual changes, including CSV imports and role changes, require an authorized approver other than the requester. Expiry and offboarding block access immediately. Record audit entries in the same transaction as membership changes, approvals, or rejections.
 
 ## 8. REST API
 
-Tiền tố `/v1`. Nguồn chân lý là `api/openapi.yaml`; AI phải viết file này **trước** khi cài đặt handler. Xác thực bằng `Authorization: Bearer <JWT>`. Lỗi trả về dạng `{ "error": { "code", "message" } }`. Danh sách dùng **cursor pagination**.
+Use the `/v1` prefix. Define the contract in `api/openapi.yaml` before implementing handlers. Authenticate with `Authorization: Bearer <JWT>`. Return errors as `{ "error": { "code", "message" } }`. Use cursor pagination for lists.
 
-**Auth:** `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`, `PUT /me/devices` (đăng ký/cập nhật push token)
+**Auth:** `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`, `PUT /me/devices` (register or update the push token)
 
-OpenAPI mô tả refresh token trong body cho mobile và refresh cookie giới hạn theo host cho web chat và web quản trị. Web nhận cookie từ login và refresh, logout thu hồi phiên và xóa cookie. Mỗi bề mặt từ chối request refresh chứa đồng thời token body và cookie.
+OpenAPI defines body-based refresh tokens for mobile and host-scoped refresh cookies for web chat and web admin. Sign-in and refresh set the web cookie. Sign-out revokes the session and clears the cookie. Reject refresh requests that supply both a body token and a cookie.
 
-**Users và directory:** `GET /users` (tìm theo tên, lớp, khối), `GET /users/{id}`, `GET /users/{id}/presence`
+**Users and directory:** `GET /users` (search by name, class, or grade), `GET /users/{id}`, `GET /users/{id}/presence`
 
 **Channels:**
 
-- `GET /channels` (channel của tôi, kèm unread), `POST /channels`, `GET /channels/{id}`, `PATCH /channels/{id}`, `POST /channels/{id}/archive`
+- `GET /channels` (the caller's channels with unread counts), `POST /channels`, `GET /channels/{id}`, `PATCH /channels/{id}`, `POST /channels/{id}/archive`
 - `GET/POST/DELETE /channels/{id}/members`
-- `POST /dms` (mở hoặc lấy DM, kiểm tra policy)
-- `POST /channels/{id}/read` với `{ "seq": N }` (cập nhật last\_read\_seq)
+- `POST /dms` (open or retrieve a DM, subject to policy)
+- `POST /channels/{id}/read` with `{ "seq": N }` (update `last_read_seq`)
 - `PUT /channels/{id}/prefs` (mute, notif\_pref)
 
 **Messages:**
 
-- `GET /channels/{id}/messages?before_seq=&after_seq=&limit=` (mặc định 50, tối đa 100)
-- `POST /channels/{id}/messages` với `body`, `parent_id`, `attachment_ids`, `client_msg_id` (**idempotency key**: gửi lại cùng `client_msg_id` không tạo tin trùng)
-- `PATCH /messages/{id}`, `DELETE /messages/{id}` (xóa mềm)
+- `GET /channels/{id}/messages?before_seq=&after_seq=&limit=` (50 by default, maximum 100)
+- `POST /channels/{id}/messages` with `body`, `parent_id`, `attachment_ids`, and `client_msg_id` as the **idempotency key**. A retry with the same `client_msg_id` preserves a single message.
+- `PATCH /messages/{id}`, `DELETE /messages/{id}` (soft delete)
 - `PUT/DELETE /messages/{id}/reactions/{emoji}`
 - `GET /messages/{id}/thread`
 - `POST /messages/{id}/report`
 
-**Files:** `POST /files` (multipart hoặc presigned URL), `GET /files/{id}` (chỉ trả khi `scan_status=clean` và người dùng có quyền vào channel), giới hạn dung lượng và loại file cấu hình được
+**Files:** `POST /files` (multipart or presigned URL), `GET /files/{id}` (serve only when `scan_status=clean` and the user has channel access). File sizes and types are configurable.
 
-**Search:** `GET /search?q=&type=messages|files|users|channels&channel_id=&from=&to=`. Kết quả luôn **lọc theo quyền** của người gọi
+**Search:** `GET /search?q=&type=messages|files|users|channels&channel_id=&from=&to=`. Always **filter results by the caller's permissions**.
 
-**Broadcast:** `POST /broadcasts`, `GET /broadcasts`, `GET /broadcasts/{id}` (kèm thống kê), `POST /broadcasts/{id}/cancel`
+**Broadcast:** `POST /broadcasts`, `GET /broadcasts`, `GET /broadcasts/{id}` (with statistics), `POST /broadcasts/{id}/cancel`
 
-**Segments:** `GET/POST /segments`, `PATCH /segments/{id}`, `GET /segments/{id}/members`, `POST /segments/{id}/members`, `PATCH/DELETE /segments/{id}/members/{user_id}` (đổi vai trò, đặt hạn, gỡ), `POST /segments/{id}/members/import` (CSV), `POST /segments/{id}/review` (xác nhận rà soát), `GET /segment-change-requests`, `POST /segment-change-requests/{id}/approve` và `/reject`. Mọi endpoint kiểm tra quyền theo vai trò của người gọi trong segment
+**Segments:** `GET/POST /segments`, `PATCH /segments/{id}`, `GET /segments/{id}/members`, `POST /segments/{id}/members`, `PATCH/DELETE /segments/{id}/members/{user_id}` (change role, set expiration, or remove), `POST /segments/{id}/members/import` (CSV), `POST /segments/{id}/review` (confirm review), `GET /segment-change-requests`, `POST /segment-change-requests/{id}/approve` and `/reject`. Every endpoint checks the caller's segment role.
 
 **Admin:** `GET/PUT /admin/policies`, `GET/POST/PUT/DELETE /admin/policy-rules`, `GET/PUT /admin/retention`, `GET /admin/audit`, `POST /admin/directory/sync`, `GET /admin/reports`, `POST /admin/users/{id}/disable`
 
-**Idempotency gửi tin:** lưu khóa duy nhất theo `(channel_id, sender_id, client_msg_id)`, fingerprint payload và ID tin trong giao dịch cấp seq. Retry đồng thời cùng payload trả cùng ID và seq; khác payload trả `409`. Giữ khóa tối thiểu 7 ngày kể cả khi tin bị xóa.
+**Message idempotency.** Store the unique `(channel_id, sender_id, client_msg_id)` key, payload fingerprint, and message ID in the sequence allocation transaction. Concurrent retries with the same payload return the same ID and sequence. A different payload returns `409`. Retain keys for at least seven days, including after message deletion.
 
-## 9. Giao thức WebSocket
+## 9. WebSocket protocol
 
-Endpoint `GET /v1/ws`; mobile gửi `Authorization: Bearer <JWT>` khi mở kết nối. Web chat mở WSS cùng origin và gửi access token trong frame `auth` đầu tiên. Server kiểm tra `Origin` theo allowlist khi upgrade từ trình duyệt, giới hạn kết nối chưa xác thực, đóng sau 5 giây nếu chưa xác thực, và chỉ cho đăng ký luồng hoặc gửi dữ liệu sau `auth.ok`. Token truyền trong header hoặc frame `auth`; các giá trị này phải được che khỏi log. JSON frame dạng `{ "type", "id", "data" }`.
+Use `GET /v1/ws`. Mobile clients send `Authorization: Bearer <JWT>` when connecting. Web chat opens same-origin WSS and sends its access token in the first `auth` frame. During browser upgrades, check `Origin` against the allowlist, limit unauthenticated connections, and close them after five seconds if authentication is incomplete. Allow subscriptions and data sends only after `auth.ok`. Redact tokens from logs whether they arrive in a header or an `auth` frame. JSON frames use `{ "type", "id", "data" }`.
 
-**Client → server:** `ping`, `typing` (channel\_id), `presence.set`, `auth`, `resume` (gửi `{ channel_id: last_event_cursor }` cho từng channel đang mở)
+**Client → server:** `ping`, `typing` (`channel_id`), `presence.set`, `auth`, `resume` (send `{ channel_id: last_event_cursor }` for each open channel)
 
 **Server → client:** `auth.ok`, `auth.expiring`, `pong`, `message.new`, `message.updated`, `message.deleted`, `reaction.changed`, `typing`, `presence.changed`, `channel.updated`, `member.changed`, `read.updated`, `broadcast.new`
 
-**Yêu cầu:**
+**Requirements**
 
-- Heartbeat 25 giây; server đóng kết nối nếu quá 60 giây không có tín hiệu
-- **Resume:** lưu cursor và dữ liệu sự kiện bền vững trong transaction khởi tạo, sửa, xóa tin hoặc đổi reaction. Worker dùng transactional outbox để publish và retry với cùng ID sự kiện. Khi resume, server đệm luồng trực tiếp, replay đến mốc đã chốt rồi hợp nhất theo cursor và loại trùng. Khi Redis kết nối lại, các socket bị ảnh hưởng phải bắt kịp. Cursor hết hạn yêu cầu tải lại snapshot. Presence và typing chỉ phát trực tiếp.
-- Token hết hạn trong lúc đang kết nối: server gửi `auth.expiring`, client refresh và gửi lại token qua frame `auth`
-- Giới hạn tốc độ gửi tin theo user (ví dụ 20 tin/10 giây); vượt thì trả lỗi và không ngắt kết nối
-- Mỗi instance giữ hub trong bộ nhớ, publish/subscribe qua Redis để phát tới người dùng nằm ở instance khác
-- Presence lưu trong Redis với TTL; typing không lưu DB
+- Send a heartbeat every 25 seconds. The server closes connections after 60 seconds without a signal.
+- **Resume:** Persist the event cursor and payload in the transaction that creates, edits, or deletes a message or changes a reaction. The worker publishes via a transactional outbox and retries with the same event ID. On resume, buffer live events, replay through a fixed cutoff, then merge and deduplicate by cursor. Affected sockets must catch up after Redis reconnects. An expired cursor requires a fresh snapshot. Presence and typing are live-only events.
+- When a token is expiring on an open connection, send `auth.expiring`. The client refreshes and sends the new token in an `auth` frame.
+- Rate-limit sends per user, for example 20 messages per 10 seconds. Return an error without disconnecting the client.
+- Each instance keeps an in-memory hub and uses Redis pub/sub to reach users connected to other instances.
+- Store presence in Redis with a TTL. Typing events are ephemeral.
 
-## 10. Broadcast tới 10.000 học sinh
+## 10. Broadcasts to 10,000 students
 
-**Nguyên tắc:** lưu **một bản ghi tin nhắn** trong announcement channel; **không** nhân bản tin cho từng học sinh. Chỉ phần push là fan-out.
+Store **one message record** in an announcement channel. Fan out only push notifications.
 
-**Luồng:**
+**Broadcast flow**
 
-1. Người có quyền gọi `POST /broadcasts` với `audience` là **biểu thức segment** (ví dụ `student:grade10`, `dept:hr`, hoặc `student:grade10 AND NOT student:class10A3`), tùy chọn `scheduled_at`
-2. Server kiểm tra rule `broadcast.send` và phạm vi audience của người gửi (manager `dept:finance` chỉ gửi tới `dept:finance`; giáo viên chỉ gửi tới lớp phụ trách nếu rule yêu cầu)
-3. Khi đến giờ, worker kiểm tra quyền, phân giải audience và commit snapshot người nhận, tin trong announcement channel và sự kiện outbox cùng một transaction. Mỗi broadcast chỉ tạo một tin qua ràng buộc duy nhất. Phát `broadcast.new` sau commit.
-4. Worker lấy device từ snapshot người nhận, ghi `push_jobs`, đẩy vào NATS, gửi theo lô (FCM tối đa 500 token/lần; APNs song song có giới hạn concurrency), có **rate limit toàn cục** và retry exponential backoff
-5. Token không hợp lệ (unregistered) bị xóa khỏi `devices`
-6. Thống kê: tổng người nhận, số push thành công/thất bại, số người xác nhận đọc bằng `PUT /broadcasts/{id}/read` idempotent.
+1. An authorized user calls `POST /broadcasts` with an `audience` **segment expression**, such as `student:grade10`, `dept:hr`, or `student:grade10 AND NOT student:class10A3`, and optionally `scheduled_at`.
+2. The server checks `broadcast.send` and the sender's audience scope. For example, the `dept:finance` manager can send to `dept:finance` only, and a teacher can send only to assigned classes if the rule requires it.
+3. At the scheduled time, the worker rechecks permission, resolves the audience, and commits the recipient snapshot, announcement channel message, and outbox event in one transaction. A uniqueness constraint ensures one message per broadcast. Emit `broadcast.new` after commit.
+4. Resolve devices from the recipient snapshot, write `push_jobs`, enqueue them in NATS, and send in batches. FCM accepts up to 500 tokens per batch. Use bounded concurrency for APNs, a **global rate limit**, and exponential backoff on retries.
+5. Remove invalid or unregistered tokens from `devices`.
+6. Track total recipients, successful and failed push deliveries, and readers who acknowledge via idempotent `PUT /broadcasts/{id}/read`.
 
-**Quyền đọc broadcast:** kiểm tra phạm vi audience lúc tạo và quyền người gửi lúc thực thi. Chốt snapshot người nhận khi bắt đầu gửi. Lưu một tin và quan hệ broadcast–user. Feed, WebSocket, search, file và push đều kiểm tra quan hệ này, trạng thái tài khoản và điều kiện cô lập dữ liệu hiện hành. Thành viên mới không nhận broadcast cũ. Job push dùng khóa duy nhất theo broadcast/device và kiểm tra trạng thái hủy trước mỗi lô. Retry có thể gửi lại push nếu worker chết sau khi provider chấp nhận nhưng trước khi lưu kết quả.
+**Broadcast access.** Check audience scope at creation and sender permissions at execution. Snapshot recipients when sending begins. Store one message and the broadcast-to-user relationship. The feed, WebSocket, search, files, and push check that relationship, account status, and current data isolation rules. New members receive only broadcasts whose snapshot includes them. Push jobs use a unique broadcast/device key and check cancellation before each batch. A retry can deliver a duplicate if the worker fails after the provider accepts the push and before the result is saved.
 
-**Yêu cầu hiệu năng:** push tới 10.000 thiết bị hoàn tất trong dưới 2 phút, **không** làm tăng độ trễ gửi tin thường quá 20%. Có thể hủy broadcast khi đang gửi (các job chưa gửi bị bỏ).
+**Performance requirements.** Complete pushes to 10,000 devices in under two minutes while limiting the increase in regular message latency to 20%. Support cancellation during sending by dropping unsent jobs.
 
-## 11. Push notification
+## 11. Push notifications
 
-- Đăng ký thiết bị qua `PUT /me/devices`; một user nhiều thiết bị
-- Quy tắc gửi push: không gửi nếu user đang online ở thiết bị khác và đã xem, đang mute/DND, ngoài giờ yên lặng, hoặc `notif_pref` không khớp (`mentions` chỉ gửi khi có @mention)
-- **Nội dung push tối giản** (ví dụ tên người gửi và "Có tin nhắn mới"), chi tiết lấy từ server khi mở app; cấu hình được để hiện/ẩn nội dung
-- Gộp (collapse) push cùng channel để tránh spam
-- Thông tin chứng chỉ APNs và service account FCM nạp từ secret, không commit vào repo
+- Register devices through `PUT /me/devices`. One user can register multiple devices.
+- Suppress push if the user is online elsewhere and has already read the message, has muted the conversation or enabled DND, is outside the permitted notification window, or has a mismatched `notif_pref`. The `mentions` preference sends only for an @mention.
+- Keep **push content minimal**, such as the sender's name and "New message". Fetch details from the server when the app opens. Make content visibility configurable.
+- Collapse notifications from the same channel to reduce noise.
+- Load APNs credentials and the FCM service account from secrets kept outside the repository.
 
-## 12. File
+## 12. Files
 
-- Upload lên MinIO; server lưu metadata và tạo job quét ClamAV; file ở trạng thái `pending` thì chưa tải được
-- File `infected` bị xóa và ghi audit, thông báo cho người gửi
-- Kiểm tra MIME bằng nội dung thật (không chỉ phần mở rộng), giới hạn mặc định 50 MB/file, danh sách loại file cho phép cấu hình được
-- Link tải là presigned URL ngắn hạn, cấp sau khi kiểm tra quyền
-- Tạo thumbnail cho ảnh
+- Upload to MinIO. The server stores metadata and queues a ClamAV scan. Downloads are unavailable while a scan is `pending`.
+- Delete `infected` files, record an audit event, and notify the sender.
+- Detect MIME type from file contents, default to a 50 MB size limit per file, and make allowed file types configurable.
+- Issue short-lived presigned download URLs after checking permission.
+- Generate image thumbnails.
 
 ## 13. Search
 
-- Worker lập chỉ mục tin nhắn, file (tên), user, channel vào OpenSearch gần thời gian thực (độ trễ dưới 5 giây)
-- Analyzer hỗ trợ **tiếng Việt có dấu và không dấu** (ICU folding), tìm theo tiền tố
-- Mỗi document mang danh sách channel/quyền; **kết quả luôn lọc theo membership** của người tìm
-- Tin bị xóa hoặc hết retention phải bị xóa khỏi index
-- Có lệnh reindex toàn bộ từ Postgres
+- Index messages, file names, users, and channels in OpenSearch in near real time, with less than five seconds of delay.
+- Use ICU folding for **Vietnamese with and without diacritics** and support prefix searches.
+- Include channel and permission data with each document. Always **filter results by the searcher's memberships**.
+- Remove deleted or expired messages from the index.
+- Provide a command to reindex everything from PostgreSQL.
 
-## 14. Retention, audit và dữ liệu
+## 14. Retention, audit, and data
 
-- **Retention:** job hằng ngày xóa hoặc lưu trữ tin theo `retention_rules` (mặc định theo loại channel; cuối năm học có thao tác archive channel lớp)
-- **Audit log** ghi tối thiểu: đăng nhập thành công/thất bại, break-glass, thay đổi policy rule, **mọi thay đổi membership và vai trò segment (kể cả do sync AD)**, duyệt/từ chối yêu cầu thay đổi, rà soát định kỳ, xóa tin bởi người khác, thêm/xóa thành viên channel thủ công, broadcast, xuất dữ liệu, vô hiệu hóa user. Không sửa hoặc xóa được qua ứng dụng
-- **Backup:** Postgres (base backup + WAL), MinIO; có script restore và kiểm thử khôi phục định kỳ
-- Dữ liệu cá nhân của học sinh chỉ lưu trong hạ tầng của trường; ghi rõ trong tài liệu vận hành các điểm dữ liệu đi ra ngoài (metadata push qua APNs/FCM)
+- **Retention:** Run a daily job to delete or archive messages according to `retention_rules`. Default to channel-type rules and provide a way to archive class channels at the end of the school year.
+- **Audit log:** Record at least successful and failed sign-ins, break-glass access, policy rule changes, **all segment membership and role changes including AD sync**, approvals and rejections, periodic reviews, deletion of another user's messages, manual channel membership changes, broadcasts, data exports, and account disabling. Keep audit entries append-only through the app.
+- **Backups:** Back up PostgreSQL (base backups and WAL) and MinIO. Provide restore scripts and test recovery periodically.
+- Keep students' personal data within school infrastructure. Document external data flows, including push metadata sent to APNs and FCM.
 
-## 15. Yêu cầu phi chức năng
+## 15. Nonfunctional requirements
 
-| Hạng mục | Mục tiêu |
+| Category | Target |
 | --- | --- |
-| Độ trễ gửi tin (p95) | dưới 300 ms trong mạng nội bộ |
-| Kết nối đồng thời | 3.000 ổn định, kiểm thử tải tới 10.000 |
-| Availability | 99,9%; Postgres có replica và failover; server chạy tối thiểu 2 instance |
-| Bảo mật | TLS mọi nơi, OWASP ASVS L2 làm chuẩn, validate toàn bộ input, parameterized query, CORS chặt, secure headers, dependency scan trong CI |
-| Mã hóa lưu trữ | Mã hóa ổ đĩa/volume; secret nằm ngoài repo |
-| Quan sát | Metrics (số kết nối WS, độ trễ gửi tin, kích thước queue, lỗi push), log có `request_id`, trace OpenTelemetry, dashboard Grafana, alert cơ bản |
-| Đa ngôn ngữ | Thông báo lỗi và nội dung hệ thống hỗ trợ Việt/Anh |
-| Múi giờ | Lưu UTC, hiển thị theo múi giờ client (Asia/Ho\_Chi\_Minh mặc định) |
+| Message send latency (p95) | Under 300 ms on the internal network |
+| Concurrent connections | 3,000 sustained, load-tested to 10,000 |
+| Availability | 99.9%, with a PostgreSQL replica and failover and at least two server instances |
+| Security | TLS throughout, OWASP ASVS Level 2, input validation, parameterized queries, strict CORS, secure headers, and dependency scanning in CI |
+| Encryption at rest | Encrypt disks or volumes and keep secrets outside the repository |
+| Observability | Metrics for WebSocket connections, message latency, queue sizes, and push failures, `request_id` in logs, OpenTelemetry traces, Grafana dashboards, and basic alerts |
+| Language support | Error messages and system content support Vietnamese and English |
+| Time zones | Store UTC and display in the client's time zone, defaulting to `Asia/Ho_Chi_Minh` |
 
-## 16. Kiểm thử và tiêu chí chất lượng
+## 16. Testing and quality criteria
 
-- **Unit test** cho `policy`, cấp seq, phân giải audience, mapping group → role (coverage từ 80% với các package này)
-- **Integration test** với `testcontainers-go` (Postgres, Redis, NATS, MinIO, một LDAP server giả như OpenLDAP); mọi endpoint có ít nhất một test thành công và một test bị từ chối quyền
-- **Test realtime:** mất kết nối giữa chừng rồi resume, đảm bảo không mất và không trùng tin; gửi trùng `client_msg_id`
-- **Test tải** (k6 hoặc `vegeta`): 3.000 WebSocket đồng thời với tải tin nhắn thực tế; kịch bản broadcast 10.000 thiết bị với FCM/APNs giả (mock)
-- **Test bảo mật:** truy cập chéo channel (IDOR), search lộ tin ngoài quyền, token đã thu hồi, brute-force đăng nhập
-- CI bắt buộc: `go vet`, `golangci-lint`, test, `govulncheck`, build Docker image
+- **Unit tests** for `policy`, sequence allocation, audience resolution, and group-to-role mapping with at least 80% coverage for those packages.
+- **Integration tests** with `testcontainers-go` for PostgreSQL, Redis, NATS, MinIO, and an LDAP test server such as OpenLDAP. Test at least one successful and one unauthorized request for each endpoint.
+- **Realtime tests:** Disconnect and resume without losing or duplicating messages. Retry with the same `client_msg_id`.
+- **Load tests** using k6 or `vegeta`: sustain 3,000 concurrent WebSockets under realistic message load and broadcast to 10,000 devices through mocked FCM and APNs.
+- **Security tests:** Cover cross-channel IDOR, search permission leaks, revoked tokens, and sign-in brute force.
+- CI requires `go vet`, `golangci-lint`, tests, `govulncheck`, and Docker image builds.
 
-Kiểm thử tải ở cả 3.000 và 10.000 WebSocket với tải gửi, kích thước channel và cấu hình môi trường được ghi lại. Đo p95 từ lúc API nhận request đến lúc trả kết quả commit. So sánh p95 có và không broadcast trên cùng tải. Mốc hai phút tính từ lúc worker bắt đầu đến lúc toàn bộ job được provider mock chấp nhận hoặc kết thúc với lỗi. Ngưỡng phục hồi ban đầu là RPO 5 phút, RTO 60 phút, kiểm tra bằng diễn tập khôi phục Postgres và MinIO. Thêm test cho retry đồng thời, thu hồi quyền giữa phiên, cô lập broadcast theo người nhận và mất Redis khi WebSocket vẫn mở.
+Run load tests at both 3,000 and 10,000 WebSocket connections and record send load, channel sizes, and environment settings. Measure p95 from API request receipt through the commit response. Compare p95 with and without a broadcast under the same load. Measure the two-minute target from worker start until the mock provider has accepted every job or jobs have failed permanently. Initial recovery targets are a five-minute RPO and a 60-minute RTO. Verify them with PostgreSQL and MinIO recovery drills. Test concurrent retries, mid-session revocation, recipient-level broadcast isolation, and Redis outages while WebSockets remain open.
 
-## 17. Lộ trình và tiêu chí nghiệm thu theo milestone
+## 17. Milestones and acceptance criteria
 
-Mỗi milestone phải **chạy được, có test, có tài liệu** trước khi sang milestone kế.
+Each milestone must **run, pass tests, and have documentation** before work proceeds to the next.
 
-**M0 - Khung dự án:** repo, cấu trúc thư mục, `docker-compose` dev (Postgres, Redis, NATS, MinIO, OpenSearch, OpenLDAP), migration đầu tiên, CI, `openapi.yaml` toàn bộ MVP. *Nghiệm thu:* `docker compose up` rồi `make test` chạy xanh.
+**M0 – Project setup.** Create the repository layout, development Docker Compose stack (PostgreSQL, Redis, NATS, MinIO, OpenSearch, OpenLDAP), first migration, CI, and complete MVP `openapi.yaml`. Accept when `make test` passes after `docker compose up`.
 
-**M1 - Auth và directory:** đăng nhập LDAPS, JWT + refresh xoay vòng, break-glass admin, sync AD, map group → segment. *Nghiệm thu:* đăng nhập bằng user OpenLDAP thử nghiệm; disable user trong LDAP thì phiên bị thu hồi sau lần sync kế.
+**M1 – Authentication and directory.** Implement LDAPS sign-in, JWTs and refresh rotation, break-glass admin, AD synchronization, and group-to-segment mapping. Accept when a test OpenLDAP user can sign in and disabling that user revokes their session after the next sync.
 
-**M2 - Chat lõi:** channel, DM, thành viên, tin nhắn, seq, thread, reaction, đã đọc, segment và policy engine (rule allow/deny), quản lý thành viên segment thủ công. *Nghiệm thu:* học sinh không DM được học sinh khác khi policy cấm; manager phòng ban chỉ thêm/xóa được thành viên segment của mình; sync AD không xóa thành viên thêm thủ công; gửi trùng `client_msg_id` không tạo tin thứ hai.
+**M2 – Core chat.** Implement channels, DMs, members, messages, sequences, threads, reactions, read state, allow and deny rules, and manual segment membership. Verify that policy can block student-to-student DMs, department managers can change membership only in their segment, AD sync preserves manually added members, and reusing a `client_msg_id` does not create a second message.
 
-**M3 - Realtime:** WebSocket hub, presence, typing, resume, Redis pub/sub giữa 2 instance. *Nghiệm thu:* ngắt mạng client 30 giây rồi nối lại vẫn nhận đủ tin, đúng thứ tự.
+**M3 – Realtime.** Implement the WebSocket hub, presence, typing, resume, and Redis pub/sub across two instances. Verify that a client disconnected for 30 seconds receives every message in order after reconnecting.
 
-**M4 - File và search:** upload, quét ClamAV, thumbnail, OpenSearch, lọc theo quyền. *Nghiệm thu:* file nhiễm virus bị chặn; user ngoài channel không tìm thấy tin của channel đó.
+**M4 – Files and search.** Implement uploads, ClamAV scanning, thumbnails, OpenSearch, and permission filtering. Verify that infected files are blocked and nonmembers cannot find a channel's messages.
 
-**M5 - Push và broadcast:** device registry, FCM/APNs sender, announcement channel, broadcast theo biểu thức segment (khối, lớp, phòng ban), lên lịch, thống kê. *Nghiệm thu:* broadcast tới 10.000 device giả dưới 2 phút.
+**M5 – Push and broadcasts.** Implement device registration, FCM and APNs delivery, announcement channels, segment-expression targeting by grade, class, or department, scheduling, and statistics. Verify that a broadcast to 10,000 mock devices finishes in under two minutes.
 
-**M6 - Vận hành và hardening:** audit, retention, admin API, rà soát định kỳ thành viên segment, metrics, backup/restore, test tải, rà soát bảo mật, tài liệu vận hành. *Nghiệm thu:* đạt các chỉ tiêu ở mục 15 và 16.
+**M6 – Operations and hardening.** Complete audit, retention, the admin API, periodic segment membership reviews, metrics, backup and restore, load testing, security review, and operational documentation. Meet the targets in sections 15 and 16.
 
-**Mốc tích hợp ứng dụng:** M0 dựng skeleton ba app và quy trình sinh client API. M1 nghiệm thu đăng nhập trên cả ba app. M2–M3 tích hợp chat/realtime trên mobile và web chat, cùng quản lý segment trên web quản trị. M4–M5 tích hợp file/search và nhận broadcast trên cả hai app chat, push trên mobile và gửi broadcast trên web quản trị. M6 hoàn tất các màn hình vận hành và kiểm thử web chat theo mục 18. Audit bắt buộc ngay tại milestone phát sinh thao tác. Ứng dụng desktop native thuộc giai đoạn sau.
+**App integration milestones.** M0 scaffolds all three apps and the API client generation workflow. M1 verifies sign-in in all three. M2–M3 integrate chat and realtime on mobile and web chat and segment management in web admin. M4–M5 add files, search, and broadcast reception to both chat apps, mobile push, and broadcast creation to web admin. M6 completes operational screens and web chat tests from section 18. Audit each action from the milestone that introduces it. The native desktop app belongs to a later phase.
 
-## 18. Đặc tả web chat
+## 18. Web chat specification
 
-**Đối tượng và phạm vi.** Học sinh, giáo viên và nhân viên dùng `apps/web-chat` để trò chuyện trong trình duyệt. MVP hỗ trợ các bản ổn định Chrome, Edge, Firefox và Safari trên desktop tại thời điểm nghiệm thu. Giao diện responsive dùng được trên màn hình hẹp. Web Push, PWA và dùng ngoại tuyến qua lần tải lại trang thuộc giai đoạn sau. Thông báo trên web MVP hiển thị trong ứng dụng khi tab đang mở.
+**Audience and scope.** Students, teachers, and staff chat in the browser through `apps/web-chat`. At acceptance, the MVP supports current stable desktop Chrome, Edge, Firefox, and Safari. The responsive UI works on narrow screens. Web Push, PWA support, and offline use across page reloads belong to a later phase. MVP web notifications appear in the app while the tab is open.
 
-### Luồng người dùng
+### User flows
 
-- Đăng nhập AD, khôi phục phiên khi tải lại trang, đăng xuất. Danh sách channel và DM hiển thị unread, mute và trạng thái kết nối. Tìm người trong directory và mở DM hoặc group DM qua API theo policy.
-- Timeline tải theo cursor, hỗ trợ tải lịch sử, nhảy tới tin được liên kết từ tìm kiếm hoặc thông báo. Soạn tin, @mention, sửa/xóa theo quyền, trả lời thread, reaction và báo cáo tin. Dùng cùng quy tắc unread với mobile. Chỉ xác nhận đọc khi cuộc trò chuyện đang hiển thị và timeline đã tới mốc tương ứng.
-- Tải tệp lên, hiển thị trạng thái quét và kết quả bị từ chối. Chỉ cung cấp thao tác tải về cho file sạch qua API. Hiển thị kết quả tìm kiếm, announcement theo audience và xác nhận đọc từng broadcast khi mở nội dung.
-- Hỗ trợ Việt/Anh, thao tác bằng bàn phím, focus hiển thị và nhãn cho trình đọc màn hình. Có trạng thái tải, rỗng, mất kết nối, gửi lỗi, hết phiên và mất quyền truy cập.
+- Sign in with AD, restore the session after reloading, and sign out. Show unread counts, mute state, and connection status in the channel and DM list. Find people in the directory and open direct or group messages through the API subject to policy.
+- Load the timeline by cursor. Allow users to load history and jump to messages linked from search or announcements. Support composing, @mentions, permission-based edits and deletion, thread replies, reactions, and reports. Use the same unread rules as mobile. Acknowledge reads only when the conversation is visible and the timeline has reached the relevant sequence.
+- Upload files and show scan and rejection states. Offer API downloads only for clean files. Show search results and announcements for the user's audience and let users acknowledge each broadcast when viewing it.
+- Support Vietnamese and English, keyboard navigation, visible focus, and screen-reader labels. Provide states for loading, empty results, disconnection, failed sends, expired sessions, and lost access.
 
-### Phiên, realtime và dữ liệu trên trình duyệt
+### Browser sessions, realtime, and data
 
-- Access token và dữ liệu chat chỉ giữ trong bộ nhớ. Phiên trình duyệt dùng refresh cookie giới hạn theo host, `HttpOnly`, `Secure`, `SameSite`. Kiểm tra Origin và CSRF khi endpoint dùng cookie. Đồng bộ đăng xuất giữa tab và tuần tự hóa refresh giữa các tab cùng origin để tránh kích hoạt thu hồi chuỗi token do refresh đồng thời.
-- Dùng WebSocket xác thực và resume theo mục 9, với backoff khi mất kết nối. Lưu cursor sự kiện trong bộ nhớ, loại trùng sau replay, tải lại snapshot khi cursor quá hạn. Tin chờ gửi được giữ trong tab và retry với cùng `client_msg_id`. Khi tải lại trang, timeline lấy lại trạng thái đã commit từ server.
-- Escape nội dung do người dùng nhập và sanitize nếu có render rich text. Khi đăng xuất, phiên bị thu hồi hoặc user mất quyền channel, đóng kết nối hoặc hủy đăng ký tương ứng, xóa dữ liệu liên quan khỏi bộ nhớ và dừng retry. API trả nội dung riêng tư với `Cache-Control: no-store`.
-- UI dựa trên quyền backend trả về để hiển thị thao tác và xử lý `401/403` từ REST hoặc WebSocket. Route và đường dẫn trực tiếp tới channel, tin, search và file đều chịu cùng kiểm tra quyền phía server.
+- Keep access tokens and chat data in memory. Use a host-scoped refresh cookie with `HttpOnly`, `Secure`, and `SameSite`. Check Origin and CSRF on endpoints that use cookies. Synchronize sign-out across tabs and serialize refreshes across same-origin tabs to avoid token-chain revocation from concurrent refreshes.
+- Use authenticated WebSocket, resume as described in section 9, and reconnect with backoff. Keep the cursor in memory, deduplicate after replay, and reload the snapshot when the cursor expires. Keep pending messages in the tab and retry with the original `client_msg_id`. After reloading, fetch the committed timeline state from the server.
+- Escape user input and sanitize rich text when rendering it. On sign-out, session revocation, or lost channel access, disconnect or unsubscribe as appropriate, clear affected in-memory data, and stop retries. Return private responses with `Cache-Control: no-store`.
+- Base available controls on backend permissions and handle `401/403` from REST or WebSocket. Apply the same server-side checks to routes and direct links for channels, messages, search, and files.
 
-### Nghiệm thu
+### Acceptance criteria
 
-- Hai trình duyệt đăng nhập, gửi và sửa tin, mở thread và đồng bộ unread. Ngắt mạng một tab trong 30 giây, gửi tin ở tab khác rồi nối lại. Timeline bắt kịp đúng thứ tự, cập nhật tin đã sửa và không tạo tin trùng khi retry.
-- Hai tab cùng hết hạn access token vẫn giữ được phiên hợp lệ khi refresh. Đăng xuất từ một tab sẽ kết thúc phiên ở các tab còn lại cùng origin. WebSocket từ origin ngoài allowlist hoặc chưa xác thực không nhận dữ liệu.
-- Gỡ quyền channel khi người dùng đang mở timeline. UI xóa nội dung liên quan và API/WS từ chối đọc tiếp. Tìm kiếm và liên kết trực tiếp cũng không truy cập được nội dung. Broadcast chỉ hiển thị cho người nhận hợp lệ, file đang chờ quét không tải được.
-- Kiểm thử các luồng trên nhóm trình duyệt hỗ trợ, kèm kiểm tra bằng bàn phím cho đăng nhập, danh sách channel, soạn tin và thao tác gửi ở bố cục desktop và màn hình hẹp.
+- Sign in with two browsers, send and edit messages, open a thread, and synchronize unread state. Disconnect one tab for 30 seconds, send messages from the other, then reconnect. Verify ordered catch-up, edits, and no duplicates after retries.
+- When access tokens expire in two tabs at once, refresh preserves a valid session. Signing out in one tab ends the session in all same-origin tabs. WebSockets from outside the origin allowlist and unauthenticated sockets receive no protected data.
+- Revoke channel access while the timeline is open. Verify that the UI clears affected content and that REST, WebSocket, search, and direct links deny access. Only eligible recipients can see a broadcast. Pending files cannot be downloaded.
+- Test supported browsers and keyboard operation for sign-in, the channel list, composing, and sending at desktop and narrow widths.
 
-## 19. Cách dùng tài liệu này với AI coding
+## 19. Using this specification for AI-assisted development
 
-1. Đưa AI **toàn bộ tài liệu** làm bối cảnh cố định (hoặc lưu thành `CLAUDE.md`/`SPEC.md` trong repo), kèm lệnh: *"Tuân thủ tech stack và cấu trúc ở mục 3-4, không tự đổi công nghệ."*
-2. Yêu cầu làm **từng milestone một**, theo thứ tự M0 → M6, mỗi lần một nhóm tính năng nhỏ (một package hoặc một nhóm endpoint)
-3. Với mỗi bước, bắt AI **viết test trước hoặc cùng lúc**, chạy test và sửa đến khi xanh trước khi sang bước sau
-4. Luôn bắt đầu bằng `openapi.yaml` và migration, review thủ công hai thứ này kỹ nhất vì mọi thứ khác phụ thuộc vào chúng
-5. **Con người phải review kỹ** các phần: xác thực/LDAP, policy phân quyền, truy vấn search lọc quyền, xử lý token, phát sinh seq, và mọi chỗ xử lý dữ liệu học sinh
-6. Sau mỗi milestone chạy lint, test, `govulncheck` và một lượt review bảo mật riêng (nhờ AI rà soát theo checklist OWASP ASVS, nhưng không thay cho review của người)
-7. Ghi các quyết định thiết kế phát sinh vào `docs/decisions.md` để AI giữ nhất quán ở các phiên sau
+1. Provide **the entire specification** as persistent context, or save it as `CLAUDE.md` or `SPEC.md` in the repository. Instruct the AI to follow the stack and layout in sections 3 and 4.
+2. Work on **one milestone at a time**, in order from M0 to M6, with one small group of features per step, such as a package or a group of endpoints.
+3. Write tests before or alongside each change and get them passing before moving on.
+4. Start with `openapi.yaml` and migrations. Review both carefully because the rest of the implementation depends on them.
+5. Require **human review** of authentication and LDAP, authorization policies, permission-filtered search, token handling, sequence allocation, and all student data handling.
+6. After each milestone, run linting, tests, and `govulncheck`, and conduct a separate security review. AI can help check OWASP ASVS, and a human reviewer remains responsible for the review.
+7. Record design decisions in `docs/decisions.md` to keep future AI-assisted work consistent.

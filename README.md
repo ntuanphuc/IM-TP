@@ -1,8 +1,8 @@
 # ChatTP
 
-Backend Go, web chat và web quản trị cho trường học. [Spec v1.2](Spec-requirement.md) mô tả đích của dự án. Repo hiện triển khai bản nền cho pilot, với phạm vi chi tiết trong [hướng dẫn cài đặt](docs/INSTALL.md).
+ChatTP is a school messaging system with a Go backend, a web chat app, and a web admin app. [Specification v1.2](Spec-requirement.md) describes the project goals. See the [installation guide](docs/INSTALL.md) for the scope of the current pilot.
 
-- [Docker Desktop trên Windows](docs/INSTALL.md#docker-desktop-trên-windows)
+- [Docker Desktop on Windows](docs/INSTALL.md#docker-desktop-on-windows)
 - [Dockhand](docs/INSTALL.md#dockhand)
-- [Kết nối Active Directory](docs/INSTALL.md#active-directory)
-- [Phạm vi triển khai](docs/INSTALL.md#phạm-vi-hiện-tại)
+- [Active Directory](docs/INSTALL.md#active-directory)
+- [Current scope](docs/INSTALL.md#current-scope)

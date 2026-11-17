@@ -17,9 +17,9 @@ interface Person { id: string; display_name: string; username: string }
 interface Announcement { id: string; body: string; scheduled_at: string; read_at: string | null }
 interface Pending { channel: string; body: string; parent_id: string; client_msg_id: string; attachment_ids:string[] }
 const initialChannel = () => new URLSearchParams(location.search).get("channel") ?? "";
-const timestamp = (value: string) => new Date(value).toLocaleString("vi-VN");
-const shortTime = (value: string) => new Date(value).toLocaleTimeString("vi-VN", {hour:"2-digit", minute:"2-digit"});
-const channelType: Record<string,string> = {dm:"Tin nhắn riêng", group_dm:"Nhóm chat", private:"Kênh riêng", announcement:"Thông báo"};
+const timestamp = (value: string) => new Date(value).toLocaleString("en-GB");
+const shortTime = (value: string) => new Date(value).toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+const channelType: Record<string,string> = {dm:"Direct message", group_dm:"Group chat", private:"Private channel", announcement:"Announcements"};
 type PeopleMode = "direct" | "group" | "channel";
 
 function Avatar({name, kind = "dm"}: {name:string; kind?:string}) {
@@ -49,7 +49,7 @@ function Chat({user}: {user: User}) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("Đang kết nối");
+  const [status, setStatus] = useState("Connecting");
   const [busy, setBusy] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem("chattp-theme") === "dark" ? "dark" : "light");
@@ -70,11 +70,11 @@ function Chat({user}: {user: User}) {
   const report = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 403) {
       setError(failure.code === "teacher_required"
-        ? "Nhóm có học sinh cần ít nhất một giáo viên."
-        : "Tài khoản của bạn chưa được phép thực hiện thao tác này.");
+        ? "Groups with students need at least one teacher."
+        : "Your account does not have permission to do this.");
       return;
     }
-    setError(failure instanceof ApiError ? "Yêu cầu không thành công (" + failure.code + ")." : "Mất kết nối. Hãy thử lại.");
+    setError(failure instanceof ApiError ? "Request failed (" + failure.code + ")." : "Connection lost. Try again.");
   }, []);
 
   const load = useCallback(async () => {
@@ -87,7 +87,7 @@ function Chat({user}: {user: User}) {
     if (!list.some((item) => item.id === channel)) {
       if (active.current.selected === channel) {
         setMessages([]); setReplies([]); setThread(""); setPending(null);
-        setError("Bạn không có quyền truy cập cuộc trò chuyện này.");
+        setError("You do not have access to this conversation.");
       }
       return;
     }
@@ -175,11 +175,11 @@ function Chat({user}: {user: User}) {
 
     async function reconnect(code: number) {
       if (closed) return;
-      setStatus("Đang kết nối lại");
+      setStatus("Reconnecting");
       if (code === 1008 && !refreshing) {
         refreshing = true;
         try { await api<User>("/me"); }
-        catch { if (!closed) setStatus("Hết phiên hoặc mất kết nối"); }
+        catch { if (!closed) setStatus("Session expired or connection lost"); }
         finally { refreshing = false; }
       }
       if (!closed) timer = setTimeout(connect, Math.min(15000, 500 * 2 ** attempt++));
@@ -200,7 +200,7 @@ function Chat({user}: {user: User}) {
             current.send(JSON.stringify({type:"resume",data:{cursor}}));
           } else cursor = frame.data.cursor;
           attempt = 0;
-          setStatus("Đã kết nối");
+          setStatus("Connected");
           invalidate();
         } else if (frame.type === "auth.expiring") {
           refresh().then(() => {
@@ -332,31 +332,31 @@ function Chat({user}: {user: User}) {
       {message.files.map((file) => file.status === "clean" && ["image/jpeg","image/png","image/gif"].includes(file.mime)
         ? <ImagePreview key={file.id} id={file.id} name={file.name} onDownload={() => {void action(() => download("/files/"+file.id,file.name));}} />
         : <p key={file.id}>{file.name} {file.status === "clean"
-        ? <button onClick={() => action(() => download("/files/"+file.id,file.name))}>Tải xuống</button>
-        : file.status === "pending" ? "· Đang quét" : "· Bị chặn"}</p>)}
+        ? <button onClick={() => action(() => download("/files/"+file.id,file.name))}>Download</button>
+        : file.status === "pending" ? "· Scanning" : "· Blocked"}</p>)}
       <div className="bubble-line">{message.body && <p>{message.body}</p>}
         <span className="bubble-clock"><time dateTime={message.created_at} title={timestamp(message.created_at)}>{shortTime(message.created_at)}</time>
-          {own && <span title="Đã gửi" aria-label="Đã gửi">✓</span>}</span>
+          {own && <span title="Sent" aria-label="Sent">✓</span>}</span>
       </div>
       </div>
       <div className="actions bubble-actions">
-        {!message.parent_id && <button onClick={() => setThread(message.id)}>Thảo luận</button>}
+        {!message.parent_id && <button onClick={() => setThread(message.id)}>Thread</button>}
         <button aria-pressed={reacted} onClick={() => action(async () => {
           await api(`/messages/${message.id}/reactions/${encodeURIComponent("👍")}`,reacted ? "DELETE" : "PUT"); await load();
         })}>👍 {message.reactions.filter((reaction) => reaction.emoji === "👍").length}</button>
         {message.sender_id === user.id && <>
           <button onClick={() => {
-            const body = prompt("Sửa tin nhắn", message.body);
+            const body = prompt("Edit message", message.body);
             if (body?.trim()) void action(async () => { await api(`/messages/${message.id}`,"PATCH",{body}); await load(); });
-          }}>Sửa</button>
+          }}>Edit</button>
           <button onClick={() => {
-            if (confirm("Xóa tin nhắn này?")) void action(async () => { await api(`/messages/${message.id}`,"DELETE"); await load(); });
-          }}>Xóa</button>
+            if (confirm("Delete this message?")) void action(async () => { await api(`/messages/${message.id}`,"DELETE"); await load(); });
+          }}>Delete</button>
         </>}
         <button onClick={() => {
-          const reason = prompt("Lý do báo cáo");
+          const reason = prompt("Reason for reporting");
           if (reason?.trim()) void action(() => api(`/messages/${message.id}/report`,"POST",{reason}));
-        }}>Báo cáo</button>
+        }}>Report</button>
       </div>
       </div>
     </article>;
@@ -378,60 +378,60 @@ function Chat({user}: {user: User}) {
   }
 
   return <div data-theme={theme} className={`chat-workspace ${panel !== "chat" || selected ? "chat-open" : ""} ${infoOpen && panel === "chat" && channel ? "with-info" : ""}`}>
-    <nav className="chat-sidebar" aria-label="Hội thoại">
-      <div className="inbox-heading"><div><h1>Đoạn chat</h1>
-        <span className="connection" role="status" data-connected={status === "Đã kết nối"}>{status}</span></div>
-        <button className="chat-primary" onClick={startConversation}>＋ Tin mới</button>
+    <nav className="chat-sidebar" aria-label="Conversations">
+      <div className="inbox-heading"><div><h1>Chats</h1>
+        <span className="connection" role="status" data-connected={status === "Connected"}>{status}</span></div>
+        <button className="chat-primary" onClick={startConversation}>＋ New message</button>
       </div>
       <div className="inbox-tools">
       <button aria-pressed={theme === "dark"} onClick={() => {
         const next = theme === "dark" ? "light" : "dark";
         setTheme(next);
         localStorage.setItem("chattp-theme",next);
-      }}>{theme === "dark" ? "Giao diện sáng" : "Giao diện tối"}</button>
-      <button aria-pressed={panel === "search"} onClick={() => {setPanel("search");setError("");}}>Tìm tin nhắn</button>
-      <button aria-pressed={panel === "broadcast"} onClick={() => { setPanel("broadcast"); void action(async () => setAnnouncements(await api("/broadcasts"))); }}>Thông báo</button>
+      }}>{theme === "dark" ? "Light mode" : "Dark mode"}</button>
+      <button aria-pressed={panel === "search"} onClick={() => {setPanel("search");setError("");}}>Search messages</button>
+      <button aria-pressed={panel === "broadcast"} onClick={() => { setPanel("broadcast"); void action(async () => setAnnouncements(await api("/broadcasts"))); }}>Announcements</button>
       </div>
       <div className="conversation-list">
-      {conversations.length === 0 && <p className="chat-muted inbox-empty">Chưa có cuộc trò chuyện.</p>}
+      {conversations.length === 0 && <p className="chat-muted inbox-empty">No conversations yet.</p>}
       {conversations.map((item) =>
         <button className="conversation" key={item.id} aria-current={panel === "chat" && item.id === selected} onClick={() => open(item.id)}>
           <Avatar name={item.name} kind={item.kind}/>
           <span className="conversation-text"><strong>{item.name}</strong><span>{item.preview || channelType[item.kind]}</span></span>
           <span className="conversation-meta">{item.preview_at && <time dateTime={item.preview_at}>{shortTime(item.preview_at)}</time>}
-          {item.unread > 0 && <span className="unread" aria-label={`${item.unread} tin chưa đọc`}>{item.unread}</span>}</span>
+          {item.unread > 0 && <span className="unread" aria-label={`${item.unread} unread`}>{item.unread}</span>}</span>
         </button>)}
       </div>
     </nav>
     <main className={`chat-main ${panel === "chat" && channel ? "active-chat" : ""}`}>
-      {(panel !== "chat" || selected !== "") && <button className="back-inbox" onClick={showInbox}>‹ Đoạn chat</button>}
+      {(panel !== "chat" || selected !== "") && <button className="back-inbox" onClick={showInbox}>‹ Chats</button>}
       {error && <p className="chat-error" role="alert">{error}</p>}
       {panel === "people" && <section className="chat-panel">
-        <h1>Tin nhắn mới</h1>
-        <div className="compose-modes" aria-label="Loại hội thoại">
+        <h1>New message</h1>
+        <div className="compose-modes" aria-label="Conversation type">
           {(["direct","group","channel"] as const).map((mode) => <button key={mode} disabled={creating} aria-pressed={peopleMode === mode}
             onClick={() => {setPeopleMode(mode);setRecipients([]);setError("");}}>
-            {{direct:"Nhắn riêng",group:"Tạo nhóm chat",channel:"Tạo kênh riêng"}[mode]}
+            {{direct:"Direct message",group:"Create group chat",channel:"Create private channel"}[mode]}
           </button>)}
         </div>
         <p className="chat-muted">{{
-          direct:"Tìm một người để bắt đầu hoặc mở lại đoạn chat 1:1.",
-          group:"Chọn ít nhất hai người để trò chuyện cùng bạn.",
-          channel:"Đặt tên cho một kênh theo lớp, dự án hoặc phòng ban rồi chọn người tham gia.",
+          direct:"Find someone to start or reopen a direct message.",
+          group:"Choose at least two people to chat with.",
+          channel:"Name a channel for a class, project, or department, then choose who can join.",
         }[peopleMode]}</p>
         <form onSubmit={(event) => {
           event.preventDefault(); const values = new FormData(event.currentTarget);
           void findPeople(String(values.get("q")));
-        }}><label>Tìm người<input type="search" name="q" placeholder="Tên hoặc tài khoản"/></label><button>Tìm</button></form>
+        }}><label>Find people<input type="search" name="q" placeholder="Name or username"/></label><button>Search</button></form>
         {peopleMode !== "direct" && recipients.length > 0 && <div className="selected-people">{recipients.map((person) =>
           <button key={person.id} type="button" onClick={() => setRecipients((current) => current.filter((item) => item.id !== person.id))}
-            aria-label={`Bỏ chọn ${person.display_name}`}>{person.display_name} ×</button>)}</div>}
+            aria-label={`Deselect ${person.display_name}`}>{person.display_name} ×</button>)}</div>}
         <div className="people-list" aria-busy={peopleLoading}>
-          {peopleLoading ? <p className="chat-muted">Đang tìm…</p> : people.length === 0 ? <p className="chat-muted">Không tìm thấy người dùng.</p> :
+          {peopleLoading ? <p className="chat-muted">Searching…</p> : people.length === 0 ? <p className="chat-muted">No users found.</p> :
             people.map((person) => <div className="person-row" key={person.id}>
               <Avatar name={person.display_name}/><span className="person-name"><strong>{person.display_name}</strong><small>{person.username}</small></span>
-              {peopleMode === "direct" ? <button className="chat-primary" disabled={creating} onClick={() => void createConversation("direct",[person])}>Nhắn tin</button> :
-                <input type="checkbox" aria-label={`Chọn ${person.display_name}`} checked={recipients.some((item) => item.id === person.id)}
+              {peopleMode === "direct" ? <button className="chat-primary" disabled={creating} onClick={() => void createConversation("direct",[person])}>Message</button> :
+                <input type="checkbox" aria-label={`Select ${person.display_name}`} checked={recipients.some((item) => item.id === person.id)}
                  onChange={(event) => {
                   const checked = event.target.checked;
                   setRecipients((current) => checked ? [...current,person] : current.filter((item) => item.id !== person.id));
@@ -443,39 +443,39 @@ function Chat({user}: {user: User}) {
           const name = String(new FormData(event.currentTarget).get("name") ?? "");
           void createConversation(peopleMode,recipients,name);
         }}>
-          <label>{peopleMode === "channel" ? "Tên kênh" : "Tên nhóm (tùy chọn)"}<input name="name" maxLength={120} required={peopleMode === "channel"}/></label>
+          <label>{peopleMode === "channel" ? "Channel name" : "Group name (optional)"}<input name="name" maxLength={120} required={peopleMode === "channel"}/></label>
           <button className="chat-primary" disabled={creating || (peopleMode === "group" && recipients.length < 2)}>
-            {peopleMode === "channel" ? "Tạo kênh" : "Tạo nhóm"}
+            {peopleMode === "channel" ? "Create channel" : "Create group"}
           </button>
         </form>}
       </section>}
       {panel === "search" && <section className="chat-panel">
-        <h1>Tìm tin nhắn</h1>
+        <h1>Search messages</h1>
         <form onSubmit={(event) => {
           event.preventDefault(); const values = new FormData(event.currentTarget);
           void action(async () => setResults(await api("/search?q="+encodeURIComponent(String(values.get("q"))))));
-        }}><label>Từ khóa<input name="q" required/></label><button>Tìm</button></form>
+        }}><label>Keyword<input name="q" required/></label><button>Search</button></form>
         {results.map((message) => <article className="message" key={message.id}>
-          <p>{message.body}</p><button onClick={() => open(message.channel_id)}>Mở hội thoại</button>
+          <p>{message.body}</p><button onClick={() => open(message.channel_id)}>Open conversation</button>
         </article>)}
       </section>}
       {panel === "broadcast" && <section className="chat-panel">
-        <h1>Thông báo</h1>
-        {announcements.length === 0 && <p>Chưa có thông báo.</p>}
+        <h1>Announcements</h1>
+        {announcements.length === 0 && <p>No announcements yet.</p>}
         {announcements.map((item) => <article className="message" key={item.id}>
           <time dateTime={item.scheduled_at}>{timestamp(item.scheduled_at)}</time>
           <p>{item.body}</p>
-          {item.read_at ? <span>Đã xác nhận</span> : <button onClick={() => action(async () => {
+          {item.read_at ? <span>Acknowledged</span> : <button onClick={() => action(async () => {
             await api(`/broadcasts/${item.id}/read`,"PUT");
             setAnnouncements(await api("/broadcasts"));
-          })}>Xác nhận đã đọc</button>}
+          })}>Acknowledge</button>}
         </article>)}
       </section>}
       {panel === "chat" && (channel ? <>
         <header className="conversation-header">
           <Avatar name={channel.name} kind={channel.kind}/>
           <div><h1>{channel.name}</h1><p>{channelType[channel.kind]}</p></div>
-          <button className="info-toggle" aria-expanded={infoOpen} onClick={() => setInfoOpen(!infoOpen)}>Thông tin</button>
+          <button className="info-toggle" aria-expanded={infoOpen} onClick={() => setInfoOpen(!infoOpen)}>Details</button>
         </header>
         <div className="chat-timeline" ref={timeline} onScroll={(event) => {
           const box=event.currentTarget;
@@ -485,19 +485,19 @@ function Chat({user}: {user: User}) {
           {messages.length >= 50 && <button onClick={() => action(async () => {
             const older = await api<Message[]>(`/channels/${selected}/messages?before_seq=${messages[0].seq}`);
             if (active.current.selected === selected) setMessages((previous) => mergeMessages(previous,older));
-          })}>Tải tin cũ</button>}
+          })}>Load older messages</button>}
         </div>
-        {messages.length === 0 && <div className="conversation-intro"><Avatar name={channel.name} kind={channel.kind}/><h2>{channel.name}</h2><p className="chat-muted">Chưa có tin nhắn.</p></div>}
+        {messages.length === 0 && <div className="conversation-intro"><Avatar name={channel.name} kind={channel.kind}/><h2>{channel.name}</h2><p className="chat-muted">No messages yet.</p></div>}
         {messages.filter((message) => !message.parent_id).map(messageCard)}
-        {thread && <section aria-label="Thảo luận">
-          <h2>Thảo luận</h2><button onClick={() => { setThread(""); setReplies([]); }}>Đóng thảo luận</button>
+        {thread && <section aria-label="Thread">
+          <h2>Thread</h2><button onClick={() => { setThread(""); setReplies([]); }}>Close thread</button>
           {replies.map(messageCard)}
         </section>}
         </div>
         {channel.kind !== "announcement" && <form className="chat-composer" onSubmit={sendForm}>
-          <input className="visually-hidden" tabIndex={-1} aria-label="Tệp đính kèm" ref={fileInput} type="file" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} />
-          <button className="attach-button" type="button" aria-label="Đính kèm tệp" title="Đính kèm tệp" onClick={() => fileInput.current?.click()}>＋</button>
-          <textarea aria-label="Tin nhắn" placeholder={thread ? "Trả lời thảo luận…" : "Nhập tin nhắn…"} rows={1}
+          <input className="visually-hidden" tabIndex={-1} aria-label="Attachment" ref={fileInput} type="file" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} />
+          <button className="attach-button" type="button" aria-label="Attach file" title="Attach file" onClick={() => fileInput.current?.click()}>＋</button>
+          <textarea aria-label="Message" placeholder={thread ? "Reply to thread…" : "Type a message…"} rows={1}
             value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={16000}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -505,27 +505,27 @@ function Chat({user}: {user: User}) {
                 event.currentTarget.form?.requestSubmit();
               }
             }}/>
-          <button className="chat-primary" disabled={busy || !!pending || (!draft.trim() && !attachment)}>Gửi</button>
-          {attachment && <span className="attachment-name">{attachment.name} <button type="button" aria-label="Bỏ tệp" onClick={() => {
+          <button className="chat-primary" disabled={busy || !!pending || (!draft.trim() && !attachment)}>Send</button>
+          {attachment && <span className="attachment-name">{attachment.name} <button type="button" aria-label="Remove attachment" onClick={() => {
             setAttachment(null); if (fileInput.current) fileInput.current.value="";
           }}>×</button></span>}
           {pending && (pending.channel === selected
-            ? <button type="button" disabled={busy} onClick={() => void send(pending)}>Gửi lại tin đang chờ</button>
-            : <button type="button" onClick={() => open(pending.channel)}>Mở đoạn chat có tin đang chờ</button>)}
+            ? <button type="button" disabled={busy} onClick={() => void send(pending)}>Retry sending</button>
+            : <button type="button" onClick={() => open(pending.channel)}>Open chat with pending message</button>)}
         </form>}
       </> : <div className="chat-blank"><span className="chat-avatar" aria-hidden="true">✦</span>
-        <h1>Tin nhắn của bạn</h1><p className="chat-muted">Chọn một đoạn chat hoặc bắt đầu nhắn tin.</p>
-        <button className="chat-primary" onClick={startConversation}>Tin nhắn mới</button>
+        <h1>Your messages</h1><p className="chat-muted">Choose a chat or start a new conversation.</p>
+        <button className="chat-primary" onClick={startConversation}>New message</button>
       </div>)}
     </main>
-    {infoOpen && channel && panel === "chat" && <aside className="chat-info" aria-label="Thông tin hội thoại">
-      <button onClick={() => setInfoOpen(false)}>‹ Quay lại</button>
+    {infoOpen && channel && panel === "chat" && <aside className="chat-info" aria-label="Conversation details">
+      <button onClick={() => setInfoOpen(false)}>‹ Back</button>
       <Avatar name={channel.name} kind={channel.kind}/>
       <h2>{channel.name}</h2>
-      <h3>Tệp gần đây</h3>
+      <h3>Recent files</h3>
       {recentFiles.length ? <ul className="shared-files">{recentFiles.map((file) => <li key={file.id}>
         <button onClick={() => void action(() => download("/files/"+file.id,file.name))}>{file.name}</button>
-      </li>)}</ul> : <p className="chat-muted">Chưa có tệp trong các tin đã tải.</p>}
+      </li>)}</ul> : <p className="chat-muted">No files in the loaded messages.</p>}
     </aside>}
   </div>;
 }

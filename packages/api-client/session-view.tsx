@@ -25,24 +25,24 @@ export function Session({ children, admin = false }: {children: (user: User) => 
       setUser(await login(String(values.get("username")), String(values.get("password"))));
       form.reset();
     } catch {
-      setError("Không đăng nhập được. Kiểm tra tài khoản, mật khẩu và kết nối.");
+      setError("Could not sign in. Check your username, password, and connection.");
     } finally {
       setBusy(false);
     }
   }
 
-  if (loading) return <main className="login">Đang khôi phục phiên…</main>;
-  if (!user) return <main className="login"><h1>{admin ? "Quản trị ChatTP" : "ChatTP"}</h1>
+  if (loading) return <main className="login">Restoring session…</main>;
+  if (!user) return <main className="login"><h1>{admin ? "ChatTP Admin" : "ChatTP"}</h1>
     <form onSubmit={submit}>
-      <label>Tài khoản<input name="username" autoComplete="username" required /></label>
-      <label>Mật khẩu<input name="password" type="password" autoComplete="current-password" required /></label>
-      <button disabled={busy}>{busy ? "Đang đăng nhập…" : "Đăng nhập"}</button>
+      <label>Username<input name="username" autoComplete="username" required /></label>
+      <label>Password<input name="password" type="password" autoComplete="current-password" required /></label>
+      <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
     </form>
     {error && <p role="alert">{error}</p>}
   </main>;
-  return <><header className="topbar"><strong>{admin ? "Quản trị ChatTP" : "ChatTP"}</strong>
+  return <><header className="topbar"><strong>{admin ? "ChatTP Admin" : "ChatTP"}</strong>
     <span>{user.display_name}</span>
-    <button onClick={() => { setError(""); logout().catch(() => setError("Chưa đăng xuất được. Hãy thử lại.")); }}>Đăng xuất</button>
+    <button onClick={() => { setError(""); logout().catch(() => setError("Could not sign out. Try again.")); }}>Sign out</button>
   </header>{error && <p role="alert">{error}</p>}
-  {admin && !user.admin ? <main className="login"><p>Tài khoản chưa có quyền quản trị.</p></main> : children(user)}</>;
+  {admin && !user.admin ? <main className="login"><p>Your account does not have admin access.</p></main> : children(user)}</>;
 }
