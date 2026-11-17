@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+secrets/
+*.pem
+*.key
+chattp-local-ca.crt

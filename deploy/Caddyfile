@@ -1,0 +1,36 @@
+{
+  admin off
+  auto_https disable_redirects
+}
+(browser) {
+  tls internal
+  encode zstd gzip
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    Content-Security-Policy "default-src 'self'; img-src 'self' blob:; connect-src 'self' wss://{$CHAT_HOST:chat.localhost}:{$HTTPS_PORT:8443}; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+  }
+  @api path /v1/* /healthz
+  handle @api {
+    reverse_proxy server:8080 {
+      header_up X-Real-IP {remote_host}
+    }
+  }
+}
+https://{$CHAT_HOST:chat.localhost}:{$HTTPS_PORT:8443} {
+  import browser
+  handle {
+    root * /srv/chat
+    try_files {path} /index.html
+    file_server
+  }
+}
+https://{$ADMIN_HOST:admin.localhost}:{$HTTPS_PORT:8443} {
+  import browser
+  handle {
+    root * /srv/admin
+    try_files {path} /index.html
+    file_server
+  }
+}

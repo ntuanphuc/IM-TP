@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: ChatTP pilot API
+  version: 0.1.0
+servers:
+  - url: /v1
+security:
+  - bearer: []
+paths:
+  /healthz:
+    get:
+      operationId: health
+      servers: [{ url: / }]
+      security: []
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      parameters:
+        - { in: header, name: X-Chat-Client, schema: { type: string, enum: [web] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Login' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /auth/refresh:
+    post:
+      operationId: refresh
+      security: []
+      parameters:
+        - { in: header, name: X-Chat-Client, schema: { type: string, enum: [web] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Refresh' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /auth/logout:
+    post:
+      operationId: logout
+      parameters:
+        - { in: header, name: X-Chat-Client, schema: { type: string, enum: [web] } }
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+  /me:
+    get:
+      operationId: me
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /users:
+    get:
+      operationId: directory
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /channels:
+    get:
+      operationId: channels
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    post:
+      operationId: createChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Channel' }
+      responses:
+        '201': { description: Success }
+        default: { description: Request failed }
+  /dms:
+    post:
+      operationId: createDm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Channel' }
+      responses:
+        '201': { description: Success }
+        default: { description: Request failed }
+  /channels/{channel}/messages:
+    parameters:
+      - { in: path, name: channel, required: true, schema: { type: string } }
+    get:
+      operationId: messages
+      parameters:
+        - { in: query, name: before_seq, schema: { type: integer } }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    post:
+      operationId: sendMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Message' }
+      responses:
+        '201': { description: Success }
+        '200': { description: Existing result for an idempotent retry }
+        default: { description: Request failed }
+  /channels/{channel}/read:
+    parameters:
+      - { in: path, name: channel, required: true, schema: { type: string } }
+    post:
+      operationId: readChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Read' }
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+  /channels/{channel}/files:
+    parameters:
+      - { in: path, name: channel, required: true, schema: { type: string } }
+    post:
+      operationId: uploadFile
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/File' }
+      responses:
+        '201': { description: Success }
+        default: { description: Request failed }
+  /files/{file}:
+    parameters:
+      - { in: path, name: file, required: true, schema: { type: string } }
+    get:
+      operationId: downloadFile
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /files/{file}/thumbnail:
+    parameters:
+      - { in: path, name: file, required: true, schema: { type: string } }
+    get:
+      operationId: imageThumbnail
+      responses:
+        '200':
+          description: Thumbnail for a clean JPEG, PNG or GIF
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        default: { description: Request failed }
+  /messages/{message}/thread:
+    parameters:
+      - { in: path, name: message, required: true, schema: { type: string } }
+    get:
+      operationId: thread
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /messages/{message}:
+    parameters:
+      - { in: path, name: message, required: true, schema: { type: string } }
+    patch:
+      operationId: edit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Body' }
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+    delete:
+      operationId: deleteMessage
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+  /messages/{message}/reactions/{emoji}:
+    parameters:
+      - { in: path, name: message, required: true, schema: { type: string } }
+      - { in: path, name: emoji, required: true, schema: { type: string } }
+    put:
+      operationId: addReaction
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+    delete:
+      operationId: deleteReaction
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+  /messages/{message}/report:
+    parameters:
+      - { in: path, name: message, required: true, schema: { type: string } }
+    post:
+      operationId: report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Report' }
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+  /search:
+    get:
+      operationId: search
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /broadcasts:
+    get:
+      operationId: broadcasts
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /broadcasts/{broadcast}/read:
+    parameters:
+      - { in: path, name: broadcast, required: true, schema: { type: string } }
+    put:
+      operationId: readBroadcast
+      responses:
+        '204': { description: Success }
+        default: { description: Request failed }
+  /admin/users:
+    get:
+      operationId: adminUsers
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/users/{user}/disable:
+    parameters:
+      - { in: path, name: user, required: true, schema: { type: string } }
+    post:
+      operationId: disableUser
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/segments:
+    get:
+      operationId: segments
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    post:
+      operationId: createSegment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Segment' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/segments/{segment}/members:
+    parameters:
+      - { in: path, name: segment, required: true, schema: { type: string } }
+    get:
+      operationId: segmentMembers
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    post:
+      operationId: changeMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Member' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/requests:
+    get:
+      operationId: requests
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/requests/{request}/{decision}:
+    parameters:
+      - { in: path, name: request, required: true, schema: { type: string } }
+      - { in: path, name: decision, required: true, schema: { type: string } }
+    post:
+      operationId: decideRequest
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/broadcasts:
+    get:
+      operationId: adminBroadcasts
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    post:
+      operationId: scheduleBroadcast
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Broadcast' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/broadcasts/{broadcast}/cancel:
+    parameters:
+      - { in: path, name: broadcast, required: true, schema: { type: string } }
+    post:
+      operationId: cancelBroadcast
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/reports:
+    get:
+      operationId: reports
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/audit:
+    get:
+      operationId: audit
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/policy-rules:
+    get:
+      operationId: listPolicyRules
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    post:
+      operationId: createPolicyRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PolicyRule' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/policy-rules/{rule}:
+    parameters:
+      - { in: path, name: rule, required: true, schema: { type: string, format: uuid } }
+    put:
+      operationId: updatePolicyRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PolicyRule' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    delete:
+      operationId: deletePolicyRule
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+  /admin/retention:
+    get:
+      operationId: retentionRules
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+    put:
+      operationId: updateRetention
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Retention' }
+      responses:
+        '200': { description: Success }
+        default: { description: Request failed }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    PolicyRule:
+      type: object
+      required: [action, effect, enabled]
+      properties:
+        subject_segment: { type: string, description: Empty means all subjects }
+        object_segment: { type: string, description: Empty means all objects }
+        action: { type: string, enum: [dm.create, group_dm.create, channel.create, message.send, broadcast.send] }
+        effect: { type: string, enum: [allow, deny] }
+        enabled: { type: boolean }
+    Retention:
+      type: object
+      required: [scope, keep_days]
+      properties:
+        scope: { type: string, enum: [global, private, dm, group_dm, announcement] }
+        keep_days: { type: integer, minimum: 1, maximum: 3650 }
+    Login:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    Refresh:
+      type: object
+      properties:
+        refresh_token: { type: string }
+    Channel:
+      type: object
+      properties:
+        name: { type: string }
+        user_ids: { type: array, items: { type: string, format: uuid } }
+    Message:
+      type: object
+      required: [client_msg_id]
+      properties:
+        body: { type: string }
+        client_msg_id: { type: string }
+        parent_id: { type: string }
+        attachment_ids: { type: array, items: { type: string } }
+    File:
+      type: object
+      required: [file]
+      properties:
+        file: { type: string, format: binary }
+    Read:
+      type: object
+      required: [seq]
+      properties:
+        seq: { type: integer, format: int64 }
+    Body:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string }
+    Report:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string }
+    Segment:
+      type: object
+      required: [key, name]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        sensitive: { type: boolean }
+    Member:
+      type: object
+      required: [user_id, role]
+      properties:
+        user_id: { type: string, format: uuid }
+        role: { type: string, enum: [member, manager, owner, remove] }
+    Broadcast:
+      type: object
+      required: [segment_id, body]
+      properties:
+        segment_id: { type: string, format: uuid }
+        body: { type: string }
+        scheduled_at: { type: string, format: date-time, nullable: true }

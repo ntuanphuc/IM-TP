@@ -1,0 +1,30 @@
+:root { font-family: "Segoe UI", system-ui, sans-serif; color:#182631; background:#f6f8fa; }
+* { box-sizing:border-box; }
+body { margin:0; }
+button, input, textarea, select { font:inherit; }
+button { border:1px solid #c3cfd7; border-radius:.35rem; padding:.45rem .7rem; background:white; color:#193044; cursor:pointer; }
+button:hover, button[aria-current="true"] { background:#e0eef5; }
+button:disabled { opacity:.55; cursor:wait; }
+:focus-visible { outline:3px solid #1979a6; outline-offset:2px; }
+input,textarea,select { border:1px solid #a6b8c4; border-radius:.35rem; padding:.48rem; max-width:100%; }
+label { display:grid; gap:.25rem; }
+form, .actions { display:flex; gap:.6rem; flex-wrap:wrap; align-items:end; }
+h1,h2,h3,p { margin-block:.55rem; }
+[role="alert"] { color:#a12825; padding:.6rem; }
+.topbar { display:flex; gap:.8rem; align-items:center; padding:.75rem 1rem; background:#132f42; color:white; }
+.topbar strong { flex:1; }
+.login { width:min(25rem,92vw); margin:12vh auto; padding:1.5rem; background:white; border:1px solid #d3dce2; }
+.login form, .login label { display:grid; }
+.layout { display:grid; grid-template-columns:minmax(13rem,21%) 1fr; min-height:calc(100vh - 3.5rem); }
+nav,.content { padding:1rem; min-width:0; }
+nav { background:#edf3f6; border-right:1px solid #d3dce2; }
+nav > button { display:block; width:100%; text-align:left; margin:.3rem 0; overflow-wrap:anywhere; }
+.content section { margin-bottom:1rem; }
+.message { background:white; border:1px solid #d3dce2; padding:.65rem; margin:.5rem 0; overflow-wrap:anywhere; }
+.message p { white-space:pre-wrap; }
+.message time { color:#526875; font-size:.82em; }
+.table { overflow:auto; margin-top:1rem; }
+table { border-collapse:collapse; width:100%; background:white; }
+th,td { padding:.55rem; border:1px solid #d3dce2; text-align:left; max-width:24rem; overflow-wrap:anywhere; }
+@media (max-width: 700px) { .layout { grid-template-columns:1fr; } nav { border-right:0; border-bottom:1px solid #d3dce2; } }
+

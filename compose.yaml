@@ -1,0 +1,142 @@
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: deploy/backend.Dockerfile
+  image: chattp/backend:local
+  restart: unless-stopped
+  environment:
+    DATABASE_URL: "postgres://chattp:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/chattp?sslmode=disable"
+    REDIS_ADDR: redis:6379
+    REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+    WEB_ORIGINS: "https://${CHAT_HOST:-chat.localhost}:${HTTPS_PORT:-8443},https://${ADMIN_HOST:-admin.localhost}:${HTTPS_PORT:-8443}"
+    AD_URLS: ${AD_URLS:-}
+    AD_BASE_DN: ${AD_BASE_DN:-}
+    AD_BIND_DN: ${AD_BIND_DN:-}
+    AD_BIND_PASSWORD: ${AD_BIND_PASSWORD:-}
+    AD_CA_PEM_BASE64: ${AD_CA_PEM_BASE64:-}
+    AD_TEACHER_GROUP_DN: ${AD_TEACHER_GROUP_DN:-}
+    AD_STAFF_GROUP_DN: ${AD_STAFF_GROUP_DN:-}
+    AD_ADMIN_GROUP_DN: ${AD_ADMIN_GROUP_DN:-}
+    LOCAL_ADMIN_USER: ${LOCAL_ADMIN_USER:-local-admin}
+    LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
+    DEMO_USER_1_PASSWORD: ${DEMO_USER_1_PASSWORD:-}
+    DEMO_USER_2_PASSWORD: ${DEMO_USER_2_PASSWORD:-}
+    BIND_IP: ${BIND_IP:-127.0.0.1}
+    MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+    MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+    OPENSEARCH_URL: ${OPENSEARCH_URL:-}
+    OPENSEARCH_USER: ${OPENSEARCH_USER:-}
+    OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-}
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chattp
+      POSTGRES_DB: chattp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "chattp", "-d", "chattp"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+  minio:
+    build:
+      context: .
+      dockerfile: deploy/minio.Dockerfile
+    image: chattp/minio:RELEASE.2025-10-15T17-29-55Z
+    pull_policy: build
+    command: ["server", "/data"]
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+  clamav:
+    image: clamav/clamav:1.4
+    restart: unless-stopped
+    volumes:
+      - clamav_data:/var/lib/clamav
+  opensearch:
+    profiles: ["search"]
+    build:
+      context: .
+      dockerfile: deploy/opensearch.Dockerfile
+    image: chattp/opensearch:local
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - search_data:/usr/share/opensearch/data
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["/usr/local/bin/server", "migrate"]
+    depends_on:
+      minio:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  server:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+  worker:
+    <<: *backend
+    command: ["/usr/local/bin/worker"]
+    depends_on:
+      server:
+        condition: service_healthy
+      clamav:
+        condition: service_started
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    image: chattp/web:local
+    restart: unless-stopped
+    environment:
+      CHAT_HOST: ${CHAT_HOST:-chat.localhost}
+      ADMIN_HOST: ${ADMIN_HOST:-admin.localhost}
+      HTTPS_PORT: ${HTTPS_PORT:-8443}
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${HTTPS_PORT:-8443}:${HTTPS_PORT:-8443}"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+volumes:
+  postgres_data:
+  minio_data:
+  clamav_data:
+  caddy_data:
+  caddy_config:
+  search_data:
